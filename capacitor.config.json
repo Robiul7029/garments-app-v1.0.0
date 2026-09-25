@@ -1,0 +1,8 @@
+{
+  "appId": "com.artboutiquesrl.productionmanager",
+  "appName": "Production Manager",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
