@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { browserSessionPersistence, getAuth, setPersistence } from "firebase/auth";
 import { getFirestore } from "firebase/firestore"; // ১. এটি যুক্ত হয়েছে
 
 const firebaseConfig = {
@@ -15,3 +15,10 @@ const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 export const db = getFirestore(app); // ২. এটি যুক্ত হয়েছে
+
+// Strict session persistence: the Firebase auth token is kept in memory / sessionStorage
+// only. Closing the tab, closing the browser, or exiting the app therefore ends the
+// session immediately. A normal page refresh inside the same tab keeps the user signed in.
+export const authPersistenceReady = setPersistence(auth, browserSessionPersistence).catch((error) => {
+  console.error('[Auth] Failed to set browserSessionPersistence', error);
+});

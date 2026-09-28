@@ -8,6 +8,7 @@ import {
   getWorkersFromFirestore,
   isInMonth,
   saveAttendanceRecord,
+  findAttendanceForWorkerDate,
   seedWorkersToFirestore,
   deleteAttendanceRecord,
   updateAttendanceRecord,
@@ -35,14 +36,24 @@ export default function SmartAttendance() {
   const [workers, setWorkers] = useState([]);
   const [records, setRecords] = useState([]);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
-  const [form, setForm] = useState({ date: today(), workerId: '', department: '', inTime: '', outTime: '', status: 'Present' });
+  // status starts empty so the manager must either pick a status explicitly (Leave /
+  // Absent) or let the In-Time derive one. A page refresh therefore always returns here.
+  const [form, setForm] = useState({ date: today(), workerId: '', department: '', inTime: '', outTime: '', status: '', lateMinutes: 0 });
+  // True only while the status is untouched or derived from the clock. Any explicit
+  // dropdown pick clears it, which is what gives the manual selection absolute priority.
+  const [autoStatus, setAutoStatus] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [invalidField, setInvalidField] = useState('');
   const [seeded, setSeeded] = useState(false);
-  const [showGrid, setShowGrid] = useState(false);
+  // Exclusive accordion: exactly one section may be open at a time, or none.
+  // 'daily' is open on page load / refresh. Clicking the open section closes it.
+  const [activeSection, setActiveSection] = useState('daily');
+  function toggleSection(section) {
+    setActiveSection((current) => (current === section ? null : section));
+  }
   const [activeTab, setActiveTab] = useState('all');
   const [selectedWorker, setSelectedWorker] = useState(null);
   const [detailMode, setDetailMode] = useState('monthly');
@@ -52,6 +63,100 @@ export default function SmartAttendance() {
   const [editWorker, setEditWorker] = useState(null);
   const [year, month] = selectedMonth.split('-').map(Number);
   const daysInSelectedMonth = monthDays(selectedMonth);
+  // In/Out times stay permanently editable. Absent only freezes the fields that are
+  // meaningless for a non-attending worker, and the submit handler falls back to the
+  // worker's profile department.
+  const isAbsent = form.status === 'Absent';
+  const selectedWorkerProfile = workers.find((worker) => String(worker.workerId) === String(form.workerId));
+  // A manual pick always wins: `autoStatus` is true only while the status is untouched
+  // or was derived from the clock, and any explicit dropdown choice turns it off.
+  const statusLocked = autoStatus && Boolean(form.status);
+  const lockDepartment = isAbsent;
+  const lateMinutes = isAbsent ? 0 : calculateLateMinutes(form.inTime);
+
+  // Auto status mode only. A manual Leave/Present/Absent must never be overwritten, so
+  // when autoStatus is off the clock just records the time and nothing else.
+  function onInTimeChange(inTime) {
+    setInvalidField('');
+    if (!autoStatus) {
+      setForm((current) => ({ ...current, inTime }));
+      return;
+    }
+    if (!inTime) {
+      // Clearing the time returns the form to "Select Status" and releases the lock.
+      setForm((current) => ({ ...current, inTime: '', status: '', lateMinutes: 0 }));
+      return;
+    }
+    const [hours, minutes] = inTime.split(':').map(Number);
+    const minutesFromMidnight = (hours * 60) + minutes;
+    setForm({
+      ...form,
+      inTime,
+      status: minutesFromMidnight > 480 ? 'Late' : 'Present',
+      lateMinutes: Math.max(0, minutesFromMidnight - 480),
+    });
+  }
+
+  function onOutTimeChange(outTime) {
+    setInvalidField('');
+    setForm((current) => ({ ...current, outTime }));
+  }
+
+  // Explicit user selection. Whatever is picked is locked in: auto-calc is switched off
+  // so later time edits cannot contradict it.
+  function onStatusChange(status) {
+    setInvalidField('');
+    if (!status) {
+      // Back to auto mode — the clock decides again.
+      setAutoStatus(true);
+      setForm((current) => ({ ...current, status: '', lateMinutes: 0 }));
+      return;
+    }
+    setAutoStatus(false);
+    if (status === 'Absent') {
+      // No times may survive under an Absent record, so clear and disable them.
+      setForm({ ...form, status, department: '', inTime: '', outTime: '', lateMinutes: 0 });
+      return;
+    }
+    setForm({ ...form, status, lateMinutes: status === 'Late' ? lateMinutes : 0 });
+  }
+
+  // Only active workers are offered in the entry dropdown. Inactive/deactivated
+  // workers are filtered out of the picker only — no worker document is ever
+  // deleted, so all of their historic attendance stays intact and searchable.
+  const activeWorkers = useMemo(
+    () => (workers || []).filter((worker) => worker && (worker.active !== false && worker.status !== 'inactive')),
+    [workers]
+  );
+  // Monthly view: Present / Leave / Late are counted from real records, Absent is derived
+  // for every elapsed calendar day of the month that has no entry for the worker.
+  const monthlySummary = useMemo(() => {
+    const list = activeWorkers;
+    return list.map((worker) => {
+      const key = String(worker.workerId);
+      const rows = (records || []).filter((record) => String(record.workerId) === key && isInMonth(record.date, year, month - 1));
+      const markedDays = new Set(rows.map((record) => Number(String(record.date).slice(-2))));
+      const present = rows.filter((record) => record.status === 'Present').length;
+      const late = rows.filter((record) => record.status === 'Late').length;
+      const leave = rows.filter((record) => record.status === 'Leave').length;
+      const explicitAbsent = rows.filter((record) => record.status === 'Absent').length;
+      const elapsedDays = (today() === today().slice(0, 7) + today().slice(7)) && String(selectedMonth) === currentMonth()
+        ? Number(today().slice(-2))
+        : daysInSelectedMonth;
+      const autoAbsent = Math.max(0, elapsedDays - markedDays.size);
+      return {
+        worker,
+        workerId: worker.workerId,
+        name: worker.name,
+        department: worker.department || rows.find((record) => record.department)?.department || '-',
+        present,
+        late,
+        leave,
+        absent: explicitAbsent + autoAbsent,
+        overtime: rows.reduce((total, record) => total + Number(record.overtimeHours || 0), 0),
+      };
+    });
+  }, [activeWorkers, records, year, month, selectedMonth, daysInSelectedMonth]);
 
   function exitStatus(record) {
     if (!record.outTime) return '-';
@@ -98,12 +203,17 @@ export default function SmartAttendance() {
   }, [activeTab, dailyRecords]);
   const summaries = useMemo(() => workers.map((worker) => {
     const workerRows = monthlyRecords.filter((record) => String(record.workerId) === String(worker.workerId));
+    const present = workerRows.filter((record) => record.status === 'Present').length;
+    const late = workerRows.filter((record) => record.status === 'Late').length;
+    const leave = workerRows.filter((record) => record.status === 'Leave').length;
     return {
       worker,
-      present: workerRows.filter((record) => record.status === 'Present').length,
+      present,
+      late,
+      leave,
+      // A working day is any day the worker was on the floor: present, late or on leave.
+      workingDays: present + late + leave,
       absent: workerRows.filter((record) => record.status === 'Absent').length,
-      late: workerRows.filter((record) => record.status === 'Late').length,
-      leave: workerRows.filter((record) => record.status === 'Leave').length,
       overtime: workerRows.reduce((total, record) => total + Number(record.overtimeHours || 0), 0),
       department: workerRows.find((record) => record.department)?.department || worker.department || '-',
       rows: workerRows,
@@ -132,7 +242,7 @@ export default function SmartAttendance() {
       setInvalidField('workerId');
       return;
     }
-    if (!form.department) {
+    if (!form.department && !isAbsent) {
       setError('Please select a Department before saving.');
       setInvalidField('department');
       return;
@@ -159,17 +269,33 @@ export default function SmartAttendance() {
         return;
       }
     }
-    const worker = workers.find((item) => String(item.workerId) === String(form.workerId));
+    const worker = activeWorkers.find((item) => String(item.workerId) === String(form.workerId));
     if (!worker) {
       setError('Select an active worker.');
       return;
     }
+    // Absent: use the worker's profile department so the record is never saved with an
+    // empty department, falling back to 'N/A' when the profile has none.
+    const department = isAbsent
+      ? (worker.department || selectedWorkerProfile?.department || 'N/A')
+      : form.department;
+    // Duplicate guard: a worker can only hold one record per date, so check Firestore
+    // before writing anything.
     setSaving(true);
     try {
-      await saveAttendanceRecord({ ...form, worker });
+      const existing = await findAttendanceForWorkerDate(form.workerId, form.date);
+      if (existing) {
+        setMessage('');
+        setError(`Your data is already saved for ${form.date}. Please try another data.`);
+        setInvalidField('workerId');
+        return;
+      }
+      await saveAttendanceRecord({ ...form, department, worker });
       setMessage(`Attendance saved for ${worker.name}.`);
       setInvalidField('');
-      setForm((current) => ({ ...current, inTime: '', outTime: '', status: 'Present' }));
+      // Reset every entry, keeping the date so consecutive absences can be logged fast.
+      setForm({ date: form.date, workerId: '', department: '', inTime: '', outTime: '', status: '', lateMinutes: 0 });
+      setAutoStatus(true);
       await loadData();
     } catch (saveError) {
       setError(saveError.message);
@@ -202,7 +328,6 @@ export default function SmartAttendance() {
     <div className="module smart-attendance-page">
       <div className="module-header"><h2>📅 Smart Attendance</h2><p className="hint">Daily entries are stored in Firestore and summarized by month.</p></div>
       <div className="attendance-toolbar">
-        <button className="btn btn-outline" onClick={() => setShowGrid((current) => !current)}>{showGrid ? 'Hide Daily Grid' : 'Show Daily Grid'}</button>
         {workers.length === 0 && <button className="btn btn-outline" onClick={handleSeed}>Seed 50 Workers</button>}
       </div>
       {loading && <p className="hint">Loading attendance...</p>}
@@ -211,22 +336,57 @@ export default function SmartAttendance() {
 
       <form className="attendance-entry-form" onSubmit={handleSubmit}>
         <label className="form-field"><span>📅 Date</span><input type="date" value={form.date} aria-invalid={invalidField === 'date'} onChange={(event) => { setInvalidField(''); setForm({ ...form, date: event.target.value }); }} required /></label>
-        <label className="form-field"><span>Worker</span><select value={form.workerId} aria-invalid={invalidField === 'workerId'} onChange={(event) => { setInvalidField(''); setForm({ ...form, workerId: event.target.value }); }} required><option value="">Select worker</option>{workers.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerId} — {worker.name}</option>)}</select></label>
-        <label className="form-field"><span>Department</span><select value={form.department} aria-invalid={invalidField === 'department'} onChange={(event) => { setInvalidField(''); setForm({ ...form, department: event.target.value }); }} required><option value="">Select department</option>{['Cutting', 'Sewing', 'Finishing', 'Washing', 'Delivery', 'Iron', 'Other'].map((department) => <option key={department}>{department}</option>)}</select></label>
-        <label className="form-field attendance-time-field"><span>🕘 In-Time</span><input type="time" value={form.inTime} aria-invalid={invalidField === 'inTime'} onChange={(event) => { const inTime = event.target.value; const [hours, minutes] = inTime.split(':').map(Number); const status = inTime ? (hours * 60 + minutes > 480 ? 'Late' : 'Present') : form.status; setInvalidField(''); setForm({ ...form, inTime, status }); }} disabled={form.status === 'Absent' || form.status === 'Leave'} /></label>
-        <label className="form-field attendance-time-field"><span>🕘 Out-Time</span><input type="time" value={form.outTime} aria-invalid={invalidField === 'outTime'} onChange={(event) => { setInvalidField(''); setForm({ ...form, outTime: event.target.value }); }} disabled={form.status === 'Absent' || form.status === 'Leave'} /></label>
-        <label className="form-field"><span>Status</span><select value={form.status} aria-invalid={invalidField === 'status'} disabled={Boolean(form.inTime)} onChange={(event) => { setInvalidField(''); const status = event.target.value; setForm({ ...form, status, inTime: ['Absent', 'Leave'].includes(status) ? '' : form.inTime, outTime: ['Absent', 'Leave'].includes(status) ? '' : form.outTime }); }}><option value="">Select status</option><option>Present</option><option>Absent</option><option>Late</option><option>Leave</option></select></label>
-        <div className="attendance-entry-actions"><span className="hint">Late: {calculateLateMinutes(form.inTime)} min · OT: {calculateOvertimeHours(form.inTime, form.outTime)} hours</span><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Attendance'}</button></div>
+        <label className="form-field"><span>Worker</span><select value={form.workerId} aria-invalid={invalidField === 'workerId'} onChange={(event) => { setInvalidField(''); setForm({ ...form, workerId: event.target.value }); }} required><option value="">Select worker</option>{activeWorkers.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerId} — {worker.name}</option>)}</select></label>
+        <label className={`form-field ${lockDepartment ? 'is-locked' : ''}`}><span>Department</span><select value={form.department} disabled={lockDepartment} aria-invalid={invalidField === 'department'} onChange={(event) => { setInvalidField(''); setForm({ ...form, department: event.target.value }); }} required><option value="">Select department</option>{['Cutting', 'Sewing', 'Finishing', 'Washing', 'Delivery', 'Iron', 'Other'].map((department) => <option key={department}>{department}</option>)}</select></label>
+        <label className={`form-field attendance-time-field ${isAbsent ? 'is-locked' : ''}`}><span>🕘 In-Time</span><input type="time" value={form.inTime} disabled={isAbsent} aria-invalid={invalidField === 'inTime'} onChange={(event) => onInTimeChange(event.target.value)} /></label>
+        <label className={`form-field attendance-time-field ${isAbsent ? 'is-locked' : ''}`}><span>🕘 Out-Time</span><input type="time" value={form.outTime} disabled={isAbsent} aria-invalid={invalidField === 'outTime'} onChange={(event) => onOutTimeChange(event.target.value)} /></label>
+        <label className={`form-field ${statusLocked ? 'is-locked' : ''}`}><span>Status{statusLocked ? ' 🔒' : ''}</span><select value={form.status} disabled={statusLocked} aria-invalid={invalidField === 'status'} onChange={(event) => onStatusChange(event.target.value)}><option value="">Select status</option><option>Present</option><option>Absent</option><option>Late</option><option>Leave</option></select></label>
+        <div className="attendance-entry-actions"><span className="hint">Late: {lateMinutes} min · OT: {calculateOvertimeHours(form.inTime, form.outTime)} hours{statusLocked ? ` · Auto-set from In-Time (${form.status})` : isAbsent ? ' · Absent: times cleared, saved without times' : form.status === 'Leave' ? ' · Manual Leave — auto-calc off' : ' · Pick a status or enter In-Time'}</span><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Attendance'}</button></div>
       </form>
 
-      <div className="attendance-tabs" role="tablist">
-        {[['all', '📂 All Records'], ['present', '🟢 Present'], ['late', '🟡 Late List'], ['overtime', '⏰ Overtime'], ['absent', '🔴 Absent List']].map(([key, label]) => <button key={key} className={`attendance-tab ${activeTab === key ? 'active' : ''}`} onClick={() => setActiveTab(key)}>{label}</button>)}
+      <div className="attendance-section">
+        <button
+          type="button"
+          className="attendance-accordion-header"
+          aria-expanded={activeSection === 'daily'}
+          onClick={() => toggleSection('daily')}
+        >
+          <span className="attendance-accordion-title">Daily Attendance Grid — {selectedMonth}</span>
+          <span className={`chevron ${activeSection === 'daily' ? 'chevron-up' : 'chevron-down'}`} aria-hidden="true" />
+        </button>
+        {activeSection === 'daily' && <div className="attendance-grid-section"><div className="table-wrap attendance-grid-wrap attendance-scroll-area"><table><thead><tr><th>Worker</th>{Array.from({ length: daysInSelectedMonth }, (_, index) => <th key={index + 1}>{index + 1}</th>)}</tr></thead><tbody>{summaries.map((summary) => { const byDay = Object.fromEntries(summary.rows.map((row) => [Number(row.date.slice(-2)), row.status])); return <tr key={summary.worker.workerId}><td>{summary.worker.name}</td>{Array.from({ length: daysInSelectedMonth }, (_, index) => <td key={index + 1}><span className={`attendance-status ${statusClass(byDay[index + 1])}`}>{byDay[index + 1]?.slice(0, 1) || '·'}</span></td>)}</tr>; })}</tbody></table></div></div>}
       </div>
-      <div className="table-wrap attendance-daily-table"><table><thead><tr><th>Worker</th><th>Department</th><th>Date</th><th>Entry Time</th><th>Exit Time</th><th>Status</th><th>Late Minutes</th><th>OT Hours</th><th>Action</th></tr></thead><tbody>{filteredDailyRecords.map((record) => <tr key={record.id}><td>{record.userName}</td><td>{record.department || '-'}</td><td>{record.date}</td><td>{record.inTime || '-'}</td><td>{record.outTime || '-'}</td><td><span className={`badge ${record.status === 'Present' ? 'badge-green' : record.status === 'Late' ? 'badge-amber' : record.status === 'Absent' ? 'badge-red' : 'badge-amber'}`}>{record.status}</span></td><td>{record.lateMinutes || 0}</td><td>{Number(record.overtimeHours || 0).toFixed(2)}</td><td><button className="btn attendance-delete-btn attendance-view-btn" disabled={deletingId === record.id} onClick={() => handleInlineDelete(record)}>{deletingId === record.id ? 'Deleting...' : 'Delete'}</button></td></tr>)}{filteredDailyRecords.length === 0 && <tr><td colSpan="9" className="empty-row">No records for {form.date} in this filter.</td></tr>}</tbody></table></div>
 
-      <div className="table-wrap"><table><thead><tr><th>Worker ID</th><th>Worker Name</th><th>Department</th><th>Total Present</th><th>Total Absent</th><th>Total Late</th><th>Overtime</th><th>Actions</th></tr></thead><tbody>{summaries.map((summary) => <tr key={summary.worker.workerId}><td>{summary.worker.workerId}</td><td>{summary.worker.name}</td><td>{summary.department}</td><td>{summary.present}</td><td>{summary.absent}</td><td>{summary.late}</td><td>{summary.overtime.toFixed(2)} h</td><td className="attendance-actions"><button className="btn btn-outline attendance-view-btn" onClick={() => { setSelectedWorker(summary.worker); setDetailMonth(selectedMonth); setDetailDate(form.date); setDetailMode('monthly'); }}>View Days</button><button className="btn btn-primary attendance-view-btn" onClick={() => { setEditWorker(summary.worker); setDetailMonth(selectedMonth); }}>Edit</button></td></tr>)}{!summaries.length && <tr><td colSpan="8" className="empty-row">Seed workers to begin attendance entry.</td></tr>}</tbody></table></div>
+      <div className="attendance-section">
+        <button
+          type="button"
+          className="attendance-accordion-header"
+          aria-expanded={activeSection === 'filtered'}
+          onClick={() => toggleSection('filtered')}
+        >
+          <span className="attendance-accordion-title">Filtered Status Records — {form.date}</span>
+          <span className={`chevron ${activeSection === 'filtered' ? 'chevron-up' : 'chevron-down'}`} aria-hidden="true" />
+        </button>
+        {activeSection === 'filtered' && <>
+        <div className="attendance-tabs" role="tablist">
+          {[['all', '📂 All Records'], ['present', '🟢 Present'], ['late', '🟡 Late List'], ['overtime', '⏰ Overtime'], ['absent', '🔴 Absent List']].map(([key, label]) => <button key={key} className={`attendance-tab ${activeTab === key ? 'active' : ''}`} onClick={() => setActiveTab(key)}>{label}</button>)}
+        </div>
+      <div className="table-wrap attendance-daily-table attendance-scroll-area"><table><thead><tr><th>Worker</th><th>Department</th><th>Date</th><th>Entry Time</th><th>Exit Time</th><th>Status</th><th>Late Minutes</th><th>OT Hours</th><th>Action</th></tr></thead><tbody>{filteredDailyRecords.map((record) => <tr key={record.id}><td>{record.userName}</td><td>{record.department || '-'}</td><td>{record.date}</td><td>{record.inTime || '-'}</td><td>{record.outTime || '-'}</td><td><span className={`badge ${record.status === 'Present' ? 'badge-green' : record.status === 'Late' ? 'badge-amber' : record.status === 'Absent' ? 'badge-red' : 'badge-amber'}`}>{record.status}</span></td><td>{record.lateMinutes || 0}</td><td>{Number(record.overtimeHours || 0).toFixed(2)}</td><td><button className="btn attendance-delete-btn attendance-view-btn" disabled={deletingId === record.id} onClick={() => handleInlineDelete(record)}>{deletingId === record.id ? 'Deleting...' : 'Delete'}</button></td></tr>)}{filteredDailyRecords.length === 0 && <tr><td colSpan="9" className="empty-row">No records for {form.date} in this filter.</td></tr>}</tbody></table></div>
+        </>}
+      </div>
 
-      {showGrid && <div className="attendance-grid-section"><h3 className="section-sub">Daily Status Grid — {selectedMonth}</h3><div className="table-wrap attendance-grid-wrap"><table><thead><tr><th>Worker</th>{Array.from({ length: daysInSelectedMonth }, (_, index) => <th key={index + 1}>{index + 1}</th>)}</tr></thead><tbody>{summaries.map((summary) => { const byDay = Object.fromEntries(summary.rows.map((row) => [Number(row.date.slice(-2)), row.status])); return <tr key={summary.worker.workerId}><td>{summary.worker.name}</td>{Array.from({ length: daysInSelectedMonth }, (_, index) => <td key={index + 1}><span className={`attendance-status ${statusClass(byDay[index + 1])}`}>{byDay[index + 1]?.slice(0, 1) || '·'}</span></td>)}</tr>; })}</tbody></table></div></div>}
+      <div className="attendance-section">
+        <button
+          type="button"
+          className="attendance-accordion-header"
+          aria-expanded={activeSection === 'monthly'}
+          onClick={() => toggleSection('monthly')}
+        >
+          <span className="attendance-accordion-title">Monthly Summary — {selectedMonth}</span>
+          <span className={`chevron ${activeSection === 'monthly' ? 'chevron-up' : 'chevron-down'}`} aria-hidden="true" />
+        </button>
+        {activeSection === 'monthly' && <div className="table-wrap attendance-scroll-area"><table><thead><tr><th>Worker ID</th><th>Worker Name</th><th>Department</th><th>Total Working Days</th><th>Total Present</th><th>Total Absent</th><th>Total Late</th><th>Total Leave</th><th>Total Overtime (Hours)</th><th>Actions</th></tr></thead><tbody>{summaries.map((summary) => <tr key={summary.worker.workerId}><td>{summary.worker.workerId}</td><td>{summary.worker.name}</td><td>{summary.department}</td><td>{summary.workingDays}</td><td>{summary.present}</td><td>{summary.absent}</td><td>{summary.late}</td><td>{summary.leave}</td><td>{summary.overtime.toFixed(2)} h</td><td className="attendance-actions"><button className="btn btn-outline attendance-view-btn" onClick={() => { setSelectedWorker(summary.worker); setDetailMonth(selectedMonth); setDetailDate(form.date); setDetailMode('monthly'); }}>View Days</button><button className="btn btn-primary attendance-view-btn" onClick={() => { setEditWorker(summary.worker); setDetailMonth(selectedMonth); }}>Edit</button></td></tr>)}{!summaries.length && <tr><td colSpan="10" className="empty-row">Seed workers to begin attendance entry.</td></tr>}</tbody></table></div>}
+      </div>
 
       {selectedWorker && <AttendanceDetailModal worker={selectedWorker} records={records} mode={detailMode} date={detailDate} month={detailMonth} onModeChange={setDetailMode} onDateChange={setDetailDate} onMonthChange={setDetailMonth} onClose={() => setSelectedWorker(null)} getDetails={recordDetails} />}
       {editWorker && <AttendanceEditModal worker={editWorker} records={records} month={detailMonth} onMonthChange={setDetailMonth} onClose={() => setEditWorker(null)} onSaved={loadData} getDetails={recordDetails} />}

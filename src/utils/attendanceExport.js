@@ -89,6 +89,8 @@ export function buildDateRangeReport(workers, records, startDate, endDate) {
     return {
       'Worker ID': worker.workerId,
       'Worker Name': worker.name,
+      // Falls back to the worker's profile when no record in range names a department.
+      Department: workerRecords.find((record) => record.department)?.department || worker.department || '-',
       'Total Present': workerRecords.filter((record) => ['Present', 'Late'].includes(record.status)).length,
       'Total Late': workerRecords.filter((record) => record.status === 'Late').length,
       'Total Absent': workerRecords.filter((record) => record.status === 'Absent').length,

@@ -9,8 +9,13 @@ export function RoleProvider({ children }) {
 }
 
 export function useRole() {
-  const { user, getLiveStatus, usersVersion } = useAuth();
-  if (!user || user.role !== 'admin') return { role: 'viewer', isAdmin: false };
+  // Guarded so a render before AuthProvider mounts (or without it) yields a viewer role
+  // instead of a destructuring crash.
+  const { user, getLiveStatus, usersVersion } = useAuth() || {};
+  if (!user) return { role: 'viewer', isAdmin: false };
+  // A super admin may carry a non-admin role string in older documents, so both
+  // signals count: role === 'admin' OR the isSuperAdmin flag.
+  if (!user.isSuperAdmin && user.role !== 'admin') return { role: 'viewer', isAdmin: false };
 
   // Super admin (the built-in approver account) is always full-access.
   if (user.isSuperAdmin) return { role: 'admin', isAdmin: true };
@@ -20,7 +25,7 @@ export function useRole() {
   // no need to log out and back in. usersVersion just forces a re-check
   // whenever any account's status changes anywhere in the app.
   void usersVersion;
-  const liveStatus = getLiveStatus(user.id) || user.status;
+  const liveStatus = (typeof getLiveStatus === 'function' ? getLiveStatus(user.id) : null) || user.status;
   const approved = liveStatus === 'approved';
   return { role: approved ? 'admin' : 'viewer', isAdmin: approved, pendingApproval: !approved };
 }

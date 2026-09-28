@@ -6,6 +6,8 @@ import { targetForProcess, dueLabel } from '../utils/calc';
 import FieldInput from './FieldInput';
 import AttendanceView from './AttendanceView';
 import SmartAttendance from '../pages/SmartAttendance';
+import LateAttendance from '../pages/LateAttendance';
+import LeaveAttendance from '../pages/LeaveAttendance';
 import AttendanceReport from '../pages/AttendanceReport';
 import QualityControlView from './QualityControlView';
 import EmployeeTargetChart from './EmployeeTargetChart';
@@ -14,7 +16,8 @@ import HourlyTimesheet from './HourlyTimesheet';
 import FinishingPlanView from './FinishingPlanView';
 import { ProductionReportView, CuttingReportView, FinishingReportView } from './ReportViews';
 import { SHORTFALL_REASONS } from '../config/menuConfig';
-import { subscribeToAttendance, subscribeToWorkers } from '../utils/attendance';
+import AttendanceSummaryDashboard from './AttendanceSummaryDashboard';
+import AttendanceMatrixGrid from './AttendanceMatrixGrid';
 
 const MONTHLY_TARGET = 10000;
 
@@ -25,9 +28,20 @@ export default function DataModule({ category, item }) {
   const [formValues, setFormValues] = useState({});
   const [editingId, setEditingId] = useState(null);
 
+  // A notification can deep-link here asking for read-only. The flag is consumed on the
+  // first render so a normal visit to the same page is unaffected.
+  const [openedReadOnly, setOpenedReadOnly] = useState(() => {
+    const forced = sessionStorage.getItem('viewOnlyTarget') === '1';
+    if (forced) sessionStorage.removeItem('viewOnlyTarget');
+    return forced;
+  });
+  const readOnly = openedReadOnly || !isAdmin;
+
   // ---- route to specialized views ----
   if (item.variant === 'attendance') {
     if (item.key === 'daily-attendance') return <SmartAttendance />;
+    if (item.key === 'late') return <LateAttendance />;
+    if (item.key === 'attendance-leave') return <LeaveAttendance />;
     return <AttendanceView category={category} item={item} />;
   }
   if (item.key === 'attendance-report') return <AttendanceReport />;
@@ -41,13 +55,15 @@ export default function DataModule({ category, item }) {
   if (item.variant === 'finishing-report') return <FinishingReportView />;
   if (item.variant === 'progress') return <ProgressView item={item} getData={getData} />;
   if (item.variant === 'present-absent') return <PresentAbsentView item={item} getData={getData} isAdmin={isAdmin} />;
+  if (item.variant === 'monthly-matrix') return <MonthlyMatrixView item={item} />;
   if (item.variant === 'report') return <ReportView item={item} getData={getData} isAdmin={isAdmin} />;
 
-  // ---- default: table view (with optional auto target/due columns) ----
+  // A general user is always read-only here, and a notification deep-link hides the
+  // controls even for a manager, so the screen only shows the data that was entered.
   const rows = getData(item.key);
-  const canAdd = isAdmin || item.userCanAdd;
-  const canEditDelete = isAdmin;
-  const canDownload = isAdmin && item.downloadable;
+  const canAdd = !readOnly && (isAdmin || item.userCanAdd);
+  const canEditDelete = isAdmin && !openedReadOnly;
+  const canDownload = isAdmin && item.downloadable && !openedReadOnly;
 
   function openAddForm() {
     setEditingId(null);
@@ -95,7 +111,6 @@ export default function DataModule({ category, item }) {
   return (
     <div className="module">
       <ModuleHeader item={item} category={category} showViewOnly={!canEditDelete} />
-
       <div className="module-actions">
         {canAdd && <button className="btn btn-primary" onClick={openAddForm}>+ Add Entry</button>}
         {canDownload && (
@@ -197,70 +212,22 @@ function ProgressView({ item, getData }) {
   );
 }
 
-function formatDate(dateValue) {
-  if (!dateValue) return '';
-  return new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-    .format(new Date(`${dateValue}T00:00:00`));
-}
-
 function PresentAbsentView({ item }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [selectedDate, setSelectedDate] = useState(today);
-  const [selectedMonth, setSelectedMonth] = useState(today.slice(0, 7));
-  const [rows, setRows] = useState([]);
-  const [workers, setWorkers] = useState([]);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    const handleError = (loadError) => setError(loadError.message || 'Unable to load attendance data.');
-    const unsubscribeAttendance = subscribeToAttendance(setRows, handleError);
-    const unsubscribeWorkers = subscribeToWorkers(setWorkers, handleError);
-    return () => { unsubscribeAttendance(); unsubscribeWorkers(); };
-  }, []);
-
-  function changeDate(dateValue) {
-    setSelectedDate(dateValue);
-    setSelectedMonth(dateValue.slice(0, 7));
-  }
-
-  const dailyRows = useMemo(() => rows.filter((row) => row.date === selectedDate), [rows, selectedDate]);
-  const absent = dailyRows.filter((row) => row.status === 'Absent');
-  const present = dailyRows.filter((row) => ['Present', 'Late'].includes(row.status));
-  const other = dailyRows.filter((row) => !['Absent', 'Present', 'Late'].includes(row.status));
-  const monthlyRows = useMemo(() => rows.filter((row) => row.date?.startsWith(selectedMonth)), [rows, selectedMonth]);
-
-  function workerName(row) {
-    return row.userName || row.employee || workers.find((worker) => String(worker.workerId) === String(row.workerId))?.name || 'Unknown worker';
-  }
-
   return (
     <div className="module">
       <div className="module-header"><h2>{item.icon} {item.label}</h2></div>
-      <div className="attendance-toolbar">
-        <label className="form-field"><span>Date</span><input type="date" value={selectedDate} onChange={(event) => changeDate(event.target.value)} /></label>
-        <label className="form-field"><span>Month View</span><input type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} /></label>
-      </div>
-      <h3 className="section-sub">{formatDate(selectedDate)}</h3>
-      {error && <p className="auth-error">{error}</p>}
-      <div className="status-summary">
-        <div className="status-chip status-red">{absent.length} Absent</div>
-        <div className="status-chip status-green">{present.length} Present</div>
-        <div className="status-chip status-amber">{other.length} Leave / Other</div>
-      </div>
-      <h3 className="section-sub">Absent Today</h3>
-      {absent.length === 0 ? <p className="hint">Nobody is marked absent.</p> : (
-        <ul className="status-list">{absent.map((r) => <li key={r.id} className="status-red">{workerName(r)}</li>)}</ul>
-      )}
-      <h3 className="section-sub">Present Today</h3>
-      {present.length === 0 ? <p className="hint">Nobody is marked present.</p> : (
-        <ul className="status-list">{present.map((r) => <li key={r.id} className="status-green">{workerName(r)}{r.status === 'Late' ? ' (Late)' : ''}</li>)}</ul>
-      )}
-      <h3 className="section-sub">Monthly Attendance Summary · {selectedMonth}</h3>
-      <div className="status-summary">
-        <div className="status-chip status-red">{monthlyRows.filter((row) => row.status === 'Absent').length} Absent</div>
-        <div className="status-chip status-green">{monthlyRows.filter((row) => ['Present', 'Late'].includes(row.status)).length} Present</div>
-        <div className="status-chip status-amber">{monthlyRows.filter((row) => !['Absent', 'Present', 'Late'].includes(row.status)).length} Leave / Other</div>
-      </div>
+      <AttendanceSummaryDashboard />
+      <h3 className="section-sub">Monthly Attendance Matrix — {item.label}</h3>
+      <AttendanceMatrixGrid />
+    </div>
+  );
+}
+
+function MonthlyMatrixView({ item }) {
+  return (
+    <div className="module">
+      <div className="module-header"><h2>{item.icon} {item.label}</h2></div>
+      <AttendanceMatrixGrid />
     </div>
   );
 }

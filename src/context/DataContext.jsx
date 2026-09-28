@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { useAuth } from './AuthContext';
+import { useActivity } from './ActivityContext';
 
-const DataContext = createContext(null);
+export const DataContext = createContext(null);
 
 // Employee master list — feeds every "Employee Name" dropdown across the app.
 // Add/remove people here (or later connect this to a real employees table).
@@ -101,8 +103,27 @@ function loadData() {
   return seed;
 }
 
+// A one-line summary of what was typed, so the bell notification says something useful
+// instead of just "new entry added".
+function summarize(action, key, entry) {
+  const values = Object.entries(entry || {})
+    .filter(([field, value]) => field !== 'id' && value !== '' && value !== null && value !== undefined)
+    .slice(0, 4)
+    .map(([field, value]) => `${field.replace(/_/g, ' ')}: ${value}`);
+  const verb = { create: 'added', update: 'updated', delete: 'deleted' }[action] || 'saved';
+  return values.length ? `${verb} — ${values.join(', ')}` : `${verb} an entry`;
+}
+
 export function DataProvider({ children }) {
   const [data, setData] = useState(loadData);
+  // Every write is logged so the bell page and History have something real to show.
+  const { user } = useAuth();
+  const { record } = useActivity();
+  const actor = user?.username || user?.email || 'Unknown user';
+
+  // A readable one-liner travels with the notification (bell item + email) so neither has
+  // to rebuild it from the raw entry.
+  const activitySummary = (action, key, entry) => summarize(action, key, entry || {});
 
   useEffect(() => {
     localStorage.setItem(DATA_KEY, JSON.stringify(data));
@@ -113,10 +134,13 @@ export function DataProvider({ children }) {
   }
 
   function addEntry(key, entry) {
+    const row = { id: ++nextId, ...entry };
     setData((prev) => ({
       ...prev,
-      [key]: [...(prev[key] || []), { id: ++nextId, ...entry }],
+      [key]: [...(prev[key] || []), row],
     }));
+    record('create', { key, entry: row, actor, summary: activitySummary('create', key, row), actionRequired: 'Review the new entry' });
+    return row;
   }
 
   function updateEntry(key, id, updated) {
@@ -124,13 +148,16 @@ export function DataProvider({ children }) {
       ...prev,
       [key]: (prev[key] || []).map((row) => (row.id === id ? { ...row, ...updated } : row)),
     }));
+    record('update', { key, entry: { ...updated, id }, actor, summary: activitySummary('update', key, updated), actionRequired: 'Confirm the change is correct' });
   }
 
   function deleteEntry(key, id) {
+    const previous = (data[key] || []).find((row) => row.id === id) || { id };
     setData((prev) => ({
       ...prev,
       [key]: (prev[key] || []).filter((row) => row.id !== id),
     }));
+    record('delete', { key, entry: previous, actor, summary: activitySummary('delete', key, previous), actionRequired: 'Confirm the removal is intended' });
   }
 
   function setRaw(key, value) {
@@ -138,7 +165,7 @@ export function DataProvider({ children }) {
   }
 
   return (
-    <DataContext.Provider value={{ getData, addEntry, updateEntry, deleteEntry, setRaw }}>
+    <DataContext.Provider value={{ getData, addEntry, updateEntry, deleteEntry, setRaw, summarize }}>
       {children}
     </DataContext.Provider>
   );

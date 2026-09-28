@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { attendanceExportConfig, attendanceSheetConfig, menu, payrollConfig, salaryConfig } from '../config/menuConfig';
+import { menu, payrollConfig, salaryConfig } from '../config/menuConfig';
+import { useAuth } from '../context/AuthContext';
 
 // The ☰ button opens an overlay drawer.
 // Inside the drawer every department is listed; tapping one expands its
@@ -12,6 +13,9 @@ export default function Sidebar() {
   const [openCat, setOpenCat] = useState(null);
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
+  // Admin area links accept either signal: role 'admin' or the isSuperAdmin flag.
+  const isAdminUser = Boolean(user) && (user.isSuperAdmin || user.role === 'admin');
 
   function go(path) {
     navigate(path);
@@ -59,18 +63,43 @@ export default function Sidebar() {
               </div>
             ))}
 
-            <button className="sidebar-cat sidebar-cat-link" onClick={() => go('/salary')}>
-              {salaryConfig.icon} {salaryConfig.label}
-            </button>
-            <button className="sidebar-cat sidebar-cat-link" onClick={() => go('/payroll')}>
-              {payrollConfig.icon} {payrollConfig.label}
-            </button>
-            <button className="sidebar-cat sidebar-cat-link" onClick={() => go('/attendance-sheet')}>
-              {attendanceSheetConfig.icon} {attendanceSheetConfig.label}
-            </button>
-            <button className="sidebar-cat sidebar-cat-link" onClick={() => go('/attendance/export')}>
-              {attendanceExportConfig.icon} {attendanceExportConfig.label}
-            </button>
+            {/* Salary is a collapsible parent: the Payroll Worksheet lives under it. */}
+            <div className="sidebar-group">
+              <button
+                className="sidebar-cat sidebar-cat-link"
+                onClick={() => setOpenCat(openCat === 'salary' ? null : 'salary')}
+                aria-expanded={openCat === 'salary'}
+              >
+                <span>{salaryConfig.icon} {salaryConfig.label}</span>
+                <span className="chev">{openCat === 'salary' ? '▾' : '▸'}</span>
+              </button>
+              {openCat === 'salary' && (
+                <div className="sidebar-items">
+                  <button
+                    className={'sidebar-item' + (location.pathname === '/salary' ? ' active' : '')}
+                    onClick={() => go('/salary')}
+                  >
+                    {salaryConfig.icon} Salary Register
+                  </button>
+                  <button
+                    className={'sidebar-item' + (location.pathname === '/payroll' ? ' active' : '')}
+                    onClick={() => go('/payroll')}
+                  >
+                    {payrollConfig.icon} {payrollConfig.label}
+                  </button>
+                </div>
+              )}
+            </div>
+            {isAdminUser && (
+              <button className="sidebar-cat sidebar-cat-link" onClick={() => go('/admin/workers')}>
+                👥 Employee Management
+              </button>
+            )}
+            {isAdminUser && (
+              <button className="sidebar-cat sidebar-cat-link" onClick={() => go('/admin/approvals')}>
+                🛡️ Admin Approvals
+              </button>
+            )}
           </aside>
         </div>
       )}

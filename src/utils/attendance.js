@@ -1,4 +1,4 @@
-import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { db } from '../firebase';
 
 export const STANDARD_WORKERS = [
@@ -59,8 +59,33 @@ export function calculateLateMinutes(inTime) {
   return Math.max(0, (hours * 60 + minutes) - (8 * 60));
 }
 
+/**
+ * Deterministic document ID for an attendance day, e.g. "5_2026-09-28".
+ * Using workerId_date means Firestore itself can never hold two records for the same
+ * worker on the same day — a second write would target the same document.
+ */
+export function attendanceDocId(workerId, date) {
+  return `${workerId}_${date}`;
+}
+
+/**
+ * Looks for an existing attendance record for this worker on this date. Records created
+ * before deterministic IDs existed use auto-generated IDs, so the query is by field
+ * rather than by document ID.
+ */
+export async function findAttendanceForWorkerDate(workerId, date) {
+  if (!workerId || !date) return null;
+  const snapshot = await getDocs(query(
+    collection(db, 'attendance'),
+    where('workerId', '==', Number(workerId)),
+    where('date', '==', date)
+  ));
+  if (snapshot.empty) return null;
+  return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+}
+
 export async function saveAttendanceRecord({ worker, department, date, inTime, outTime, status }) {
-  return addDoc(collection(db, 'attendance'), {
+  return setDoc(doc(db, 'attendance', attendanceDocId(worker.workerId, date)), {
     userId: String(worker.workerId),
     workerId: Number(worker.workerId),
     userName: worker.name,
@@ -72,6 +97,7 @@ export async function saveAttendanceRecord({ worker, department, date, inTime, o
     lateMinutes: calculateLateMinutes(inTime),
     overtimeHours: calculateOvertimeHours(inTime, outTime),
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 }
 
@@ -84,11 +110,64 @@ export async function updateAttendanceRecord(recordId, { date, inTime, outTime, 
     department: department || '',
     lateMinutes: calculateLateMinutes(inTime),
     overtimeHours: calculateOvertimeHours(inTime, outTime),
+    updatedAt: serverTimestamp(),
   });
 }
 
 export async function deleteAttendanceRecord(recordId) {
   return deleteDoc(doc(db, 'attendance', recordId));
+}
+
+/**
+ * Writes one Leave record per calendar day of an advance multi-day leave, so a
+ * From/To entry shows up day by day on this page and in Smart Attendance. Days
+ * that already hold a record are skipped rather than overwritten — attendance
+ * already entered for that day always wins over an advance request.
+ */
+export async function saveLeaveRange({ worker, department, fromDate, toDate, leaveType, comment }) {
+  if (!worker || !fromDate) throw new Error('Worker and a start date are required.');
+  if (toDate && toDate < fromDate) throw new Error('The end date cannot be before the start date.');
+
+  // Cap the expansion so a typo'd year cannot spin thousands of writes.
+  const MAX_DAYS = 60;
+  const created = [];
+  const skipped = [];
+  const cursor = new Date(`${fromDate}T00:00:00`);
+  const end = toDate ? new Date(`${toDate}T00:00:00`) : cursor;
+
+  while (cursor <= end && created.length + skipped.length < MAX_DAYS) {
+    const date = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+    const existing = await findAttendanceForWorkerDate(worker.workerId, date);
+    if (existing) {
+      skipped.push(date);
+    } else {
+      await saveAttendanceRecord({
+        worker,
+        department,
+        date,
+        inTime: '',
+        outTime: '',
+        status: 'Leave',
+      });
+      created.push(date);
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  // The span and the reason only exist on the first day, so the row reads as one
+  // multi-day request instead of N unrelated single days.
+  if (created.length) {
+    const first = created[0];
+    await updateDoc(doc(db, 'attendance', attendanceDocId(worker.workerId, first)), {
+      leaveType: leaveType || 'Leave',
+      comment: comment || '',
+      fromDate,
+      toDate: toDate || fromDate,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  return { created, skipped };
 }
 
 export async function getAttendanceFromFirestore() {

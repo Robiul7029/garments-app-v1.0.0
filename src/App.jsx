@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { SecurityProvider, useSecurity } from './context/SecurityContext';
 import { RoleProvider, useRole } from './context/RoleContext';
 import { DataProvider } from './context/DataContext';
+import { ActivityProvider } from './context/ActivityContext';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
@@ -13,6 +15,9 @@ import AttendanceReport from './pages/AttendanceReport';
 import AuthScreen from './pages/AuthScreen';
 import DataModule from './components/DataModule';
 import Settings from './pages/Settings';
+import History from './pages/History';
+import AdminDashboard from './components/AdminDashboard';
+import EmployeeManagement from './components/EmployeeManagement';
 import { menu } from './config/menuConfig';
 
 function PendingApprovalBanner() {
@@ -26,6 +31,16 @@ function PendingApprovalBanner() {
   );
 }
 
+// Admin area guard. Both signals are accepted: the explicit `role: 'admin'`
+// claim and the `isSuperAdmin` flag, so an approver account whose document
+// carries a different role string is not locked out. Everyone else is sent home.
+function AdminRoute({ children }) {
+  const { user } = useAuth();
+  const allowed = Boolean(user) && (user.isSuperAdmin || user.role === 'admin');
+  if (!allowed) return <Navigate to="/" replace />;
+  return children;
+}
+
 function WelcomeSplash({ name }) {
   return (
     <div className="welcome-splash">
@@ -36,6 +51,9 @@ function WelcomeSplash({ name }) {
 
 function AppShell() {
   const { user } = useAuth();
+  // Loaded here so the login screen can offer PIN / fingerprint, and the settings page can
+  // read the user's security preferences.
+  const { clearSessionVault } = useSecurity();
   const [showWelcome, setShowWelcome] = useState(false);
   const wasLoggedIn = useRef(false);
 
@@ -49,10 +67,14 @@ function AppShell() {
     if (!user) wasLoggedIn.current = false;
   }, [user]);
 
+  // No vault material is kept between sessions, so this only matters for a clean handover.
+  useEffect(() => { if (!user) clearSessionVault(); }, [user, clearSessionVault]);
+
   if (!user) return <AuthScreen />;
 
   return (
     <RoleProvider>
+      <ActivityProvider>
       <DataProvider>
         {showWelcome && <WelcomeSplash name={user.username || user.email} />}
         <div className="app-shell">
@@ -67,9 +89,15 @@ function AppShell() {
                 <Route path="/payroll" element={<Payroll />} />
                 <Route path="/attendance-sheet" element={<SmartAttendance />} />
                 <Route path="/attendance/export" element={<AttendanceReport />} />
-                <Route path="/settings" element={<Settings />} />
+                <Route path="/settings" element={<Settings section="privacy" />} />
                 <Route path="/privacy" element={<Settings section="privacy" />} />
-                <Route path="/history" element={<Settings section="history" />} />
+                <Route path="/settings/security" element={<Settings section="security" />} />
+                <Route path="/history" element={<History />} />
+                <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
+                {/* Friendly aliases so the admin area can be reached from either word. */}
+                <Route path="/admin/workers" element={<AdminRoute><EmployeeManagement /></AdminRoute>} />
+                <Route path="/admin/approvals" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
+                <Route path="/admin/employee-management" element={<AdminRoute><EmployeeManagement /></AdminRoute>} />
                 {menu.map((cat) =>
                   cat.items.map((item) => (
                     <Route
@@ -84,6 +112,7 @@ function AppShell() {
           </div>
         </div>
       </DataProvider>
+      </ActivityProvider>
     </RoleProvider>
   );
 }
@@ -92,7 +121,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppShell />
+        <SecurityProvider>
+          <AppShell />
+        </SecurityProvider>
       </AuthProvider>
     </BrowserRouter>
   );

@@ -243,6 +243,14 @@ export const menu = [
         downloadable: false,
       },
       {
+        key: 'monthly-matrix',
+        label: 'Monthly Matrix',
+        icon: '📊',
+        variant: 'monthly-matrix',
+        source: 'daily-attendance',
+        downloadable: false,
+      },
+      {
         key: 'late',
         label: 'Late',
         icon: '⏰',
@@ -261,7 +269,9 @@ export const menu = [
         label: 'Leave',
         icon: '🗓️',
         variant: 'table',
-        userCanAdd: true,
+        // Leave rows are derived from the Smart Attendance collection, so there is no
+        // manual entry form on this page.
+        userCanAdd: false,
         downloadable: true,
         fields: [
           { name: 'employee', label: 'Employee Name', type: 'employee-select' },
