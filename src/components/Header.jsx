@@ -73,6 +73,10 @@ export default function Header() {
   const [accountOpen, setAccountOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  // Confirmation shown before "Add / Switch Another Account" signs the user out, so the
+  // destructive action is never taken on a single stray click.
+  const [switchAccountOpen, setSwitchAccountOpen] = useState(false);
+  const [switchingAccount, setSwitchingAccount] = useState(false);
   const [pendingMgrs, setPendingMgrs] = useState(EMPTY);
   // Delete + undo. A deleted row is only HIDDEN for 5 s, never spliced out, so UNDO puts it
   // back in exactly the same position.
@@ -300,6 +304,32 @@ export default function Header() {
     navigate(path);
   }
 
+  // "Add / Switch Another Account" opens a confirmation instead of signing out straight away.
+  function requestSwitchAccount() {
+    setAccountOpen(false);
+    setSwitchAccountOpen(true);
+  }
+
+  // "No" and the backdrop both just dismiss the modal; the current page is untouched.
+  function cancelSwitchAccount() {
+    setSwitchAccountOpen(false);
+  }
+
+  // "Yes" signs out (guarded: a missing logout must not crash the header) and lands on the
+  // login / registration screen where another account can be created or signed in to.
+  async function confirmSwitchAccount() {
+    setSwitchAccountOpen(false);
+    setSwitchingAccount(true);
+    try {
+      if (typeof logout === 'function') await logout('signin');
+    } catch (error) {
+      console.error('[Header] switch account sign-out failed', error?.message || error);
+    } finally {
+      setSwitchingAccount(false);
+      navigate('/login');
+    }
+  }
+
   return (
     <>
       <header className="app-header">
@@ -447,7 +477,7 @@ export default function Header() {
                 <button className="account-dropdown-item" onClick={() => { setAccountOpen(false); setProfileOpen(true); }}>👤 <span>Profile / Account</span></button>
                 <button className="account-dropdown-item" onClick={() => go('/history')}>📜 <span>History</span></button>
                 <button className="account-dropdown-item" onClick={() => go('/settings')}>⚙️ <span>Settings</span></button>
-                <button className="account-dropdown-item" onClick={() => { setAccountOpen(false); if (typeof logout === 'function') logout('signin'); }}>🔄 <span>Add / Switch Another Account</span></button>
+                <button className="account-dropdown-item" onClick={requestSwitchAccount}>🔄 <span>Add / Switch Another Account</span></button>
                 <button className="account-dropdown-item account-dropdown-logout" onClick={() => { setAccountOpen(false); if (typeof logout === 'function') logout('signin'); }}>🚪 <span>Log Out</span></button>
               </div>
             )}
@@ -466,6 +496,30 @@ export default function Header() {
       {!pendingDelete && actionError && (
         <div className="notif-toast notif-toast-error" role="alert">
           <span className="notif-toast-text">{actionError}</span>
+        </div>
+      )}
+
+      {switchAccountOpen && (
+        <div className="modal-backdrop" onClick={cancelSwitchAccount} role="presentation">
+          <div
+            className="profile-modal confirm-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Switch account confirmation"
+          >
+            <div className="profile-modal-head">
+              <h2>Switch account</h2>
+              <button type="button" className="modal-close" onClick={cancelSwitchAccount} aria-label="Close">✕</button>
+            </div>
+            <p className="confirm-modal-text">Are you sure you want to log out to create or switch account?</p>
+            <div className="settings-actions confirm-modal-actions">
+              <button type="button" className="btn btn-outline" disabled={switchingAccount} onClick={cancelSwitchAccount}>No</button>
+              <button type="button" className="btn btn-primary" disabled={switchingAccount} onClick={confirmSwitchAccount}>
+                {switchingAccount ? 'Signing out…' : 'Yes'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

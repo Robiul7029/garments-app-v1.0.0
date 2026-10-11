@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRole } from '../context/RoleContext';
+import AttendancePeriodFilter from '../components/AttendancePeriodFilter';
 import {
   calculateOvertimeHours,
   calculateLateMinutes,
@@ -12,6 +13,7 @@ import {
   seedWorkersToFirestore,
   deleteAttendanceRecord,
   updateAttendanceRecord,
+  subscribeToWorkers,
 } from '../utils/attendance';
 
 function today() {
@@ -31,11 +33,37 @@ function statusClass(status) {
   return String(status || '').toLowerCase().replace(/\s+/g, '-');
 }
 
+// Worker names are stored as a single full-name string, so a query is tested against
+// every space-separated token: first, middle and last name all match independently.
+function workerNameTokens(worker = {}) {
+  return String(worker.name || worker.fullName || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function workerMatchesQuery(worker, query) {
+  const term = String(query || '').trim().toLowerCase();
+  if (!term) return true;
+  if (String(worker.workerId ?? '').toLowerCase().includes(term)) return true;
+  // The shared Employee ID (EMP-007) is searchable too, so a supervisor can find a
+  // person by the same identifier the directory shows them.
+  if (String(worker.employeeId ?? '').toLowerCase().includes(term)) return true;
+  const tokens = workerNameTokens(worker);
+  if (tokens.some((token) => token.startsWith(term))) return true;
+  // Also allow the raw full-name string to match, so "son ltd" works across tokens.
+  return tokens.join(' ').includes(term);
+}
+
 export default function SmartAttendance() {
   const { isAdmin } = useRole();
   const [workers, setWorkers] = useState([]);
   const [records, setRecords] = useState([]);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  // Single-day drill-down. Empty means "whole month", which is the default view.
+  const [selectedDate, setSelectedDate] = useState('');
+  // Live worker search: filters the grid and the monthly summary instantly by name/ID.
+  const [workerSearch, setWorkerSearch] = useState('');
   // status starts empty so the manager must either pick a status explicitly (Leave /
   // Absent) or let the In-Time derive one. A page refresh therefore always returns here.
   const [form, setForm] = useState({ date: today(), workerId: '', department: '', inTime: '', outTime: '', status: '', lateMinutes: 0 });
@@ -63,6 +91,12 @@ export default function SmartAttendance() {
   const [editWorker, setEditWorker] = useState(null);
   const [year, month] = selectedMonth.split('-').map(Number);
   const daysInSelectedMonth = monthDays(selectedMonth);
+  // Day columns for the daily grid: the whole month, or only the picked single day.
+  const visibleDayColumns = useMemo(() => {
+    if (!selectedDate) return Array.from({ length: daysInSelectedMonth }, (_, index) => index + 1);
+    const day = Number(selectedDate.slice(-2));
+    return day ? [day] : [];
+  }, [selectedDate, daysInSelectedMonth]);
   // In/Out times stay permanently editable. Absent only freezes the fields that are
   // meaningless for a non-attending worker, and the submit handler falls back to the
   // worker's profile department.
@@ -192,8 +226,50 @@ export default function SmartAttendance() {
 
   useEffect(() => { loadData(); }, []);
 
-  const monthlyRecords = useMemo(() => records.filter((record) => isInMonth(record.date, year, month - 1)), [records, year, month]);
-  const dailyRecords = useMemo(() => records.filter((record) => record.date === form.date), [records, form.date]);
+  // Live roster: Manpower Management → Line Deployment is the single place a worker
+  // is created or renamed, and it mirrors every change into the `workers` collection.
+  // Subscribing here means a new hire appears in this screen's picker and grids
+  // without a manual refresh — the two modules share one master list.
+  useEffect(() => {
+    const unsubscribe = subscribeToWorkers(
+      (rows) => setWorkers(rows),
+      (subscribeError) => console.error('[SmartAttendance] worker subscription failed', subscribeError),
+    );
+    return () => { if (typeof unsubscribe === 'function') unsubscribe(); };
+  }, []);
+
+  // A single day narrows every grid/list below to that date; an empty date shows the whole
+  // selected month. The month always follows the picked date so the day columns stay valid.
+  const handleDateChange = (value) => {
+    setSelectedDate(value);
+    if (value) setSelectedMonth(value.slice(0, 7));
+  };
+  const handleMonthChange = (value) => {
+    setSelectedMonth(value);
+    // Dropping a stale single-day filter keeps the grid valid when the month moves away
+    // from the day that was pinned.
+    if (selectedDate && selectedDate.slice(0, 7) !== value) setSelectedDate('');
+  };
+  const matchesWorkerSearch = (worker, record) => {
+    const term = String(workerSearch || '').trim().toLowerCase();
+    if (!term) return true;
+    return String(worker?.workerId ?? '').toLowerCase().includes(term)
+      || String(worker?.name ?? '').toLowerCase().includes(term)
+      || String(record?.userName ?? '').toLowerCase().includes(term);
+  };
+
+  const monthlyRecords = useMemo(() => {
+    const base = records.filter((record) => isInMonth(record.date, year, month - 1));
+    if (!selectedDate) return base;
+    return base.filter((record) => String(record.date).slice(0, 10) === selectedDate);
+  }, [records, year, month, selectedDate]);
+  const dailyRecords = useMemo(() => {
+    const base = records.filter((record) => (selectedDate || form.date) === record.date);
+    const term = String(workerSearch || '').trim().toLowerCase();
+    if (!term) return base;
+    return base.filter((record) => String(record.userName || '').toLowerCase().includes(term)
+      || String(record.workerId ?? '').toLowerCase().includes(term));
+  }, [records, selectedDate, form.date, workerSearch]);
   const filteredDailyRecords = useMemo(() => {
     if (activeTab === 'present') return dailyRecords.filter((record) => record.status === 'Present');
     if (activeTab === 'late') return dailyRecords.filter((record) => record.status === 'Late');
@@ -201,7 +277,7 @@ export default function SmartAttendance() {
     if (activeTab === 'absent') return dailyRecords.filter((record) => record.status === 'Absent');
     return dailyRecords;
   }, [activeTab, dailyRecords]);
-  const summaries = useMemo(() => workers.map((worker) => {
+  const summaries = useMemo(() => workers.filter((worker) => matchesWorkerSearch(worker)).map((worker) => {
     const workerRows = monthlyRecords.filter((record) => String(record.workerId) === String(worker.workerId));
     const present = workerRows.filter((record) => record.status === 'Present').length;
     const late = workerRows.filter((record) => record.status === 'Late').length;
@@ -218,7 +294,7 @@ export default function SmartAttendance() {
       department: workerRows.find((record) => record.department)?.department || worker.department || '-',
       rows: workerRows,
     };
-  }), [workers, monthlyRecords]);
+  }), [workers, monthlyRecords, workerSearch]);
 
   async function handleSeed() {
     setError('');
@@ -329,6 +405,14 @@ export default function SmartAttendance() {
       <div className="module-header"><h2>📅 Smart Attendance</h2><p className="hint">Daily entries are stored in Firestore and summarized by month.</p></div>
       <div className="attendance-toolbar">
         {workers.length === 0 && <button className="btn btn-outline" onClick={handleSeed}>Seed 50 Workers</button>}
+        <AttendancePeriodFilter
+          month={selectedMonth}
+          onMonthChange={handleMonthChange}
+          date={selectedDate}
+          onDateChange={handleDateChange}
+          search={workerSearch}
+          onSearchChange={setWorkerSearch}
+        />
       </div>
       {loading && <p className="hint">Loading attendance...</p>}
       {message && <p className="settings-success">{message}</p>}
@@ -336,7 +420,7 @@ export default function SmartAttendance() {
 
       <form className="attendance-entry-form" onSubmit={handleSubmit}>
         <label className="form-field"><span>📅 Date</span><input type="date" value={form.date} aria-invalid={invalidField === 'date'} onChange={(event) => { setInvalidField(''); setForm({ ...form, date: event.target.value }); }} required /></label>
-        <label className="form-field"><span>Worker</span><select value={form.workerId} aria-invalid={invalidField === 'workerId'} onChange={(event) => { setInvalidField(''); setForm({ ...form, workerId: event.target.value }); }} required><option value="">Select worker</option>{activeWorkers.map((worker) => <option key={worker.workerId} value={worker.workerId}>{worker.workerId} — {worker.name}</option>)}</select></label>
+        <label className="form-field"><span>Worker</span><WorkerCombobox workers={activeWorkers} value={form.workerId} invalid={invalidField === 'workerId'} onChange={(workerId) => { setInvalidField(''); setForm((current) => ({ ...current, workerId })); }} /></label>
         <label className={`form-field ${lockDepartment ? 'is-locked' : ''}`}><span>Department</span><select value={form.department} disabled={lockDepartment} aria-invalid={invalidField === 'department'} onChange={(event) => { setInvalidField(''); setForm({ ...form, department: event.target.value }); }} required><option value="">Select department</option>{['Cutting', 'Sewing', 'Finishing', 'Washing', 'Delivery', 'Iron', 'Other'].map((department) => <option key={department}>{department}</option>)}</select></label>
         <label className={`form-field attendance-time-field ${isAbsent ? 'is-locked' : ''}`}><span>🕘 In-Time</span><input type="time" value={form.inTime} disabled={isAbsent} aria-invalid={invalidField === 'inTime'} onChange={(event) => onInTimeChange(event.target.value)} /></label>
         <label className={`form-field attendance-time-field ${isAbsent ? 'is-locked' : ''}`}><span>🕘 Out-Time</span><input type="time" value={form.outTime} disabled={isAbsent} aria-invalid={invalidField === 'outTime'} onChange={(event) => onOutTimeChange(event.target.value)} /></label>
@@ -351,10 +435,10 @@ export default function SmartAttendance() {
           aria-expanded={activeSection === 'daily'}
           onClick={() => toggleSection('daily')}
         >
-          <span className="attendance-accordion-title">Daily Attendance Grid — {selectedMonth}</span>
+          <span className="attendance-accordion-title">Daily Attendance Grid — {selectedMonth}{selectedDate ? ` · ${selectedDate}` : ''}</span>
           <span className={`chevron ${activeSection === 'daily' ? 'chevron-up' : 'chevron-down'}`} aria-hidden="true" />
         </button>
-        {activeSection === 'daily' && <div className="attendance-grid-section"><div className="table-wrap attendance-grid-wrap attendance-scroll-area"><table><thead><tr><th>Worker</th>{Array.from({ length: daysInSelectedMonth }, (_, index) => <th key={index + 1}>{index + 1}</th>)}</tr></thead><tbody>{summaries.map((summary) => { const byDay = Object.fromEntries(summary.rows.map((row) => [Number(row.date.slice(-2)), row.status])); return <tr key={summary.worker.workerId}><td>{summary.worker.name}</td>{Array.from({ length: daysInSelectedMonth }, (_, index) => <td key={index + 1}><span className={`attendance-status ${statusClass(byDay[index + 1])}`}>{byDay[index + 1]?.slice(0, 1) || '·'}</span></td>)}</tr>; })}</tbody></table></div></div>}
+        {activeSection === 'daily' && <div className="attendance-grid-section"><div className="table-wrap attendance-grid-wrap attendance-scroll-area"><table><thead><tr><th>Worker</th>{visibleDayColumns.map((day) => <th key={day}>{day}</th>)}</tr></thead><tbody>{summaries.map((summary) => { const byDay = Object.fromEntries(summary.rows.map((row) => [Number(row.date.slice(-2)), row.status])); return <tr key={summary.worker.workerId}><td>{summary.worker.name}</td>{visibleDayColumns.map((day) => <td key={day}><span className={`attendance-status ${statusClass(byDay[day])}`}>{byDay[day]?.slice(0, 1) || '·'}</span></td>)}</tr>; })}</tbody></table></div></div>}
       </div>
 
       <div className="attendance-section">
@@ -385,7 +469,7 @@ export default function SmartAttendance() {
           <span className="attendance-accordion-title">Monthly Summary — {selectedMonth}</span>
           <span className={`chevron ${activeSection === 'monthly' ? 'chevron-up' : 'chevron-down'}`} aria-hidden="true" />
         </button>
-        {activeSection === 'monthly' && <div className="table-wrap attendance-scroll-area"><table><thead><tr><th>Worker ID</th><th>Worker Name</th><th>Department</th><th>Total Working Days</th><th>Total Present</th><th>Total Absent</th><th>Total Late</th><th>Total Leave</th><th>Total Overtime (Hours)</th><th>Actions</th></tr></thead><tbody>{summaries.map((summary) => <tr key={summary.worker.workerId}><td>{summary.worker.workerId}</td><td>{summary.worker.name}</td><td>{summary.department}</td><td>{summary.workingDays}</td><td>{summary.present}</td><td>{summary.absent}</td><td>{summary.late}</td><td>{summary.leave}</td><td>{summary.overtime.toFixed(2)} h</td><td className="attendance-actions"><button className="btn btn-outline attendance-view-btn" onClick={() => { setSelectedWorker(summary.worker); setDetailMonth(selectedMonth); setDetailDate(form.date); setDetailMode('monthly'); }}>View Days</button><button className="btn btn-primary attendance-view-btn" onClick={() => { setEditWorker(summary.worker); setDetailMonth(selectedMonth); }}>Edit</button></td></tr>)}{!summaries.length && <tr><td colSpan="10" className="empty-row">Seed workers to begin attendance entry.</td></tr>}</tbody></table></div>}
+        {activeSection === 'monthly' && <div className="table-wrap attendance-scroll-area"><table><thead><tr><th>Employee ID</th><th>Worker Name</th><th>Department</th><th>Total Working Days</th><th>Total Present</th><th>Total Absent</th><th>Total Late</th><th>Total Leave</th><th>Total Overtime (Hours)</th><th>Actions</th></tr></thead><tbody>{summaries.map((summary) => <tr key={summary.worker.workerId}><td className="mono-cell">{summary.worker.employeeId || summary.worker.workerId}</td><td>{summary.worker.name}</td><td>{summary.department}</td><td>{summary.workingDays}</td><td>{summary.present}</td><td>{summary.absent}</td><td>{summary.late}</td><td>{summary.leave}</td><td>{summary.overtime.toFixed(2)} h</td><td className="attendance-actions"><button className="btn btn-outline attendance-view-btn" onClick={() => { setSelectedWorker(summary.worker); setDetailMonth(selectedMonth); setDetailDate(form.date); setDetailMode('monthly'); }}>View Days</button><button className="btn btn-primary attendance-view-btn" onClick={() => { setEditWorker(summary.worker); setDetailMonth(selectedMonth); }}>Edit</button></td></tr>)}{!summaries.length && <tr><td colSpan="10" className="empty-row">Seed workers to begin attendance entry.</td></tr>}</tbody></table></div>}
       </div>
 
       {selectedWorker && <AttendanceDetailModal worker={selectedWorker} records={records} mode={detailMode} date={detailDate} month={detailMonth} onModeChange={setDetailMode} onDateChange={setDetailDate} onMonthChange={setDetailMonth} onClose={() => setSelectedWorker(null)} getDetails={recordDetails} />}
@@ -445,7 +529,7 @@ function AttendanceEditModal({ worker, records, month, onMonthChange, onClose, o
 
   return <div className="attendance-modal-backdrop" onClick={onClose}>
     <section className="attendance-modal attendance-edit-modal" onClick={(event) => event.stopPropagation()}>
-      <div className="attendance-modal-header"><div><h2>Edit Attendance — {worker.name}</h2><p className="hint">Worker ID: {worker.workerId}</p></div><button className="btn btn-outline" onClick={onClose}>Close</button></div>
+      <div className="attendance-modal-header"><div><h2>Edit Attendance — {worker.name}</h2><p className="hint">Employee ID: {worker.employeeId || worker.workerId}</p></div><button className="btn btn-outline" onClick={onClose}>Close</button></div>
       <div className="attendance-detail-controls"><label className="form-field"><span>Month</span><input type="month" value={month} onChange={(event) => onMonthChange(event.target.value)} /></label></div>
       {message && <p className="settings-success">{message}</p>}{error && <p className="auth-error">{error}</p>}
       <div className="table-wrap attendance-detail-table"><table><thead><tr><th>Date</th><th>Department</th><th>In-Time</th><th>Out-Time</th><th>Status</th><th>Late Minutes</th><th>OT Hours</th><th>Action</th></tr></thead><tbody>{workerRecords.map((record) => { const draft = drafts[record.id] || record; const details = getDetails(draft); return <tr key={record.id}><td><input type="date" value={draft.date || ''} onChange={(event) => changeDraft(record.id, 'date', event.target.value)} /></td><td><select value={draft.department || ''} onChange={(event) => changeDraft(record.id, 'department', event.target.value)}><option value="">Select department</option>{['Cutting', 'Sewing', 'Finishing', 'Washing', 'Delivery', 'Iron', 'Other'].map((department) => <option key={department}>{department}</option>)}</select></td><td><input type="time" value={draft.inTime || ''} onChange={(event) => changeDraft(record.id, 'inTime', event.target.value)} /></td><td><input type="time" value={draft.outTime || ''} onChange={(event) => changeDraft(record.id, 'outTime', event.target.value)} /></td><td><select value={draft.status || 'Present'} onChange={(event) => changeDraft(record.id, 'status', event.target.value)}><option>Present</option><option>Absent</option><option>Late</option><option>Leave</option></select></td><td>{details.lateMinutes}</td><td>{details.overtimeHours.toFixed(2)}</td><td className="attendance-actions"><button className="btn btn-primary attendance-view-btn" disabled={savingId === record.id} onClick={() => saveRow(record.id)}>{savingId === record.id ? 'Saving...' : 'Save Changes'}</button><button className="btn attendance-delete-btn attendance-view-btn" disabled={savingId === record.id} onClick={() => deleteRow(record.id)}>Delete</button></td></tr>; })}{workerRecords.length === 0 && <tr><td colSpan="8" className="empty-row">No records for this worker in the selected month.</td></tr>}</tbody></table></div>
@@ -463,9 +547,135 @@ function AttendanceDetailModal({ worker, records, mode, date, month, onModeChang
 
   return <div className="attendance-modal-backdrop" onClick={onClose}>
     <section className="attendance-modal" onClick={(event) => event.stopPropagation()}>
-      <div className="attendance-modal-header"><div><h2>{worker.name}</h2><p className="hint">Worker ID: {worker.workerId}</p></div><button className="btn btn-outline" onClick={onClose}>Close</button></div>
+      <div className="attendance-modal-header"><div><h2>{worker.name}</h2><p className="hint">Employee ID: {worker.employeeId || worker.workerId}</p></div><button className="btn btn-outline" onClick={onClose}>Close</button></div>
       <div className="attendance-detail-controls"><div className="attendance-detail-tabs"><button className={`attendance-tab ${mode === 'daily' ? 'active' : ''}`} onClick={() => onModeChange('daily')}>Single Day</button><button className={`attendance-tab ${mode === 'monthly' ? 'active' : ''}`} onClick={() => onModeChange('monthly')}>Monthly View</button></div>{mode === 'daily' ? <label className="form-field"><span>Date</span><input type="date" value={date} onChange={(event) => onDateChange(event.target.value)} /></label> : <label className="form-field"><span>Month</span><input type="month" value={month} onChange={(event) => onMonthChange(event.target.value)} /></label>}</div>
       {mode === 'daily' ? <div className="table-wrap attendance-detail-table"><table><thead><tr><th>Date</th><th>Department</th><th>Entry</th><th>Exit</th><th>Status</th><th>Duty Hours</th><th>Late Minutes</th><th>Exit Status</th><th>OT Hours</th></tr></thead><tbody>{dailyRecords.map((record) => { const details = getDetails(record); return <tr key={record.id}><td>{record.date}</td><td>{record.department || '-'}</td><td>{record.inTime || '-'}</td><td>{record.outTime || '-'}</td><td>{record.status}</td><td>{details.dutyHours.toFixed(2)}</td><td>{details.lateMinutes}</td><td>{details.exitStatus}</td><td>{details.overtimeHours.toFixed(2)}</td></tr>; })}{dailyRecords.length === 0 && <tr><td colSpan="9" className="empty-row">No log for this day.</td></tr>}</tbody></table></div> : <div className="table-wrap attendance-detail-table"><table><thead><tr><th>Date</th><th>Department</th><th>Entry</th><th>Exit</th><th>Status</th><th>Late Minutes</th><th>Exit Status</th><th>OT Hours</th></tr></thead><tbody>{Array.from({ length: days }, (_, index) => { const record = byDay[index + 1]; const details = record ? getDetails(record) : null; return <tr key={index + 1}><td>{`${month}-${String(index + 1).padStart(2, '0')}`}</td><td>{record?.department || '-'}</td><td>{record?.inTime || '-'}</td><td>{record?.outTime || '-'}</td><td>{record?.status || 'No Entry'}</td><td>{details?.lateMinutes || 0}</td><td>{details?.exitStatus || '-'}</td><td>{details?.overtimeHours.toFixed(2) || '0.00'}</td></tr>; })}</tbody></table></div>}
     </section>
   </div>;
+}
+
+// Searchable worker picker. Typing filters the active workers by first, middle or last
+// name (and by worker ID) as you type; the list is keyboard navigable and falls back to
+// the plain "no match" hint when nothing fits. It replaces the old <select> so a name
+// can be found by any part of it without scrolling a long option list.
+function WorkerCombobox({ workers, value, invalid, onChange }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  // Enter must not submit the surrounding attendance form.
+  const blurTimer = React.useRef(null);
+
+  const selected = workers.find((worker) => String(worker.workerId) === String(value));
+  // While the box is closed the input mirrors the chosen worker; once it is open the raw
+  // query is shown so the user can keep refining what they typed.
+  const inputValue = open ? query : (selected ? `${selected.workerId} — ${selected.name}` : '');
+
+  const matches = useMemo(
+    () => workers.filter((worker) => workerMatchesQuery(worker, query)).slice(0, 50),
+    [workers, query]
+  );
+
+  // Keep the highlighted row inside the current result set as it narrows.
+  useEffect(() => {
+    setHighlight((current) => (current >= matches.length ? 0 : current));
+  }, [matches.length]);
+
+  function openList() {
+    if (blurTimer.current) clearTimeout(blurTimer.current);
+    setQuery('');
+    setHighlight(0);
+    setOpen(true);
+  }
+
+  function choose(worker) {
+    if (!worker) return;
+    onChange(String(worker.workerId));
+    setQuery('');
+    setOpen(false);
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!open) {
+        openList();
+        return;
+      }
+      if (matches.length === 0) return;
+      setHighlight((current) => {
+        const next = event.key === 'ArrowDown' ? current + 1 : current - 1;
+        return (next + matches.length) % matches.length;
+      });
+      return;
+    }
+    if (event.key === 'Enter') {
+      // Only swallow Enter when a suggestion is actually being picked.
+      if (open && matches[highlight]) {
+        event.preventDefault();
+        choose(matches[highlight]);
+      }
+      return;
+    }
+    if (event.key === 'Escape') {
+      setOpen(false);
+      setQuery('');
+      return;
+    }
+    if (event.key === 'Tab') {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div
+      className="worker-combobox"
+      onBlur={() => {
+        // A short delay lets a click on a suggestion land before the list closes.
+        blurTimer.current = setTimeout(() => setOpen(false), 150);
+      }}
+    >
+      <input
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        aria-invalid={invalid}
+        autoComplete="off"
+        placeholder={selected ? `${selected.employeeId || selected.workerId} — ${selected.name}` : 'Search worker by name or ID…'}
+        value={inputValue}
+        onFocus={openList}
+        onClick={openList}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setHighlight(0);
+          setOpen(true);
+        }}
+        onKeyDown={handleKeyDown}
+      />
+      {open && (
+        <ul className="worker-combobox-list" role="listbox">
+          {matches.length === 0 && (
+            <li className="worker-combobox-empty" aria-disabled="true">No worker matches “{query}”.</li>
+          )}
+          {matches.map((worker, index) => (
+            <li
+              key={worker.workerId}
+              role="option"
+              aria-selected={String(worker.workerId) === String(value)}
+              className={`worker-combobox-option ${index === highlight ? 'is-highlighted' : ''} ${String(worker.workerId) === String(value) ? 'is-selected' : ''}`}
+              onMouseDown={(event) => {
+                // Fire before the input's blur closes the list.
+                event.preventDefault();
+                choose(worker);
+              }}
+              onMouseEnter={() => setHighlight(index)}
+            >
+              <span className="worker-combobox-name">{worker.name || worker.fullName || 'Unnamed worker'}</span>
+              <span className="worker-combobox-id">{worker.employeeId || worker.workerId}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }

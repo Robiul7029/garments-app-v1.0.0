@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { menu } from '../config/menuConfig';
+import { menu, modulePath } from '../config/menuConfig';
 import { useData } from '../context/DataContext';
 
 function pct(a, t) {
@@ -34,8 +34,12 @@ export default function Dashboard() {
 
       <h3 className="section-sub">Departments</h3>
       <div className="cat-grid">
-        {menu.map((cat) => (
-          <Link key={cat.key} to={`/${cat.key}/${cat.items[0].key}`} className="cat-card" style={{ borderTop: `3px solid ${cat.accent}` }}>
+        {/* A category with no items would make `cat.items[0].key` throw and take the whole
+            Dashboard down, so it is filtered out before the link is built. */}
+        {menu
+          .filter((cat) => Array.isArray(cat?.items) && cat.items.length > 0 && cat.items[0]?.key && cat.key)
+          .map((cat) => (
+          <Link key={cat.key} to={modulePath(cat.key, cat.items[0].key)} className="cat-card" style={{ borderTop: `3px solid ${cat.accent || '#334155'}` }}>
             <span className="cat-icon">{cat.icon}</span>
             <span>{cat.label}</span>
           </Link>

@@ -28,20 +28,27 @@ service cloud.firestore {
       allow get: if request.auth !=null && request.auth.uid == userId;
 
       // Self-registration: a manager must start as "pending"; a general user as "active".
-      // The approver-only flags can never be self-set.
+      // The approver-only flags can never be self-set. The ERP role fields are
+      // included in that denial: without this, anyone could add `erpRoles:
+      // ['super_admin']` to their own profile at sign-up and be handed the whole
+      // factory. Only the approver writes them (see the rule below).
       allow create: if request.auth != null && request.auth.uid == userId
-                    && !request.resource.data.keys().hasAny(['isSuperAdmin', 'managerStatus'])
+                    && !request.resource.data.keys().hasAny(['isSuperAdmin', 'managerStatus', 'erpRole', 'erpRoles'])
                     && selfStatusAllowed(request.resource.data);
 
       // Profile edits. role/status may change only as an (re)application for manager
       // access, i.e. to role "manager" + status "pending" — never to "approved".
+      // The ERP role fields are likewise never self-writable.
       allow update: if request.auth != null && request.auth.uid == userId
-                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isSuperAdmin', 'managerStatus'])
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isSuperAdmin', 'managerStatus', 'erpRole', 'erpRoles'])
                     && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'status'])
                         || (request.resource.data.get('role', '') == 'manager'
                             && request.resource.data.get('status', '') == 'pending'));
 
-      // The approver lists pending managers and approves / rejects them.
+      // The approver lists pending managers and approves / rejects them. It is
+      // also the ONLY writer of `erpRole` / `erpRoles`, which is what makes the
+      // ERP permission matrix trustworthy: access is granted here and nowhere
+      // else, and only by the account that already holds everything.
       allow get, list, update: if isApprover();
       allow delete: if isApprover();
     }
@@ -92,8 +99,14 @@ service cloud.firestore {
      * Workers — the employee master list
      * ------------------------------------------------------------------ */
 
-    // Any signed-in user reads the list so the employee dropdowns work; only
-    // approved managers and admins may add or change people.
+    // The employee master list. Any signed-in user reads the list so the employee
+    // dropdowns work, and any signed-in user may add or change people: Employee
+    // Management is the roster behind attendance, and gating it on an approved
+    // managerDirectory entry locked out accounts whose approval had not landed yet
+    // (and the very first account, which has no directory entry at all).
+    //
+    // The write check mirrors the `employees` rule below, because one edit writes both
+    // collections in a single batch and a half-allowed batch fails entirely.
     match /workers/{workerId} {
       allow read, write, delete: if request.auth != null;
     }
@@ -106,6 +119,37 @@ service cloud.firestore {
     // attendance views and reports work, but cannot create, change or delete.
     match /attendance/{recordId} {
       allow read, write, delete: if request.auth != null;
+    }
+
+    /* ------------------------------------------------------------------ *
+     * Employees — the master list behind Employee Management
+     * ------------------------------------------------------------------ */
+
+    // The employee master list. Any signed-in user reads it so the employee dropdowns
+    // across the production modules keep working, and any signed-in user may add,
+    // change or remove people. Without this rule the collection falls through to the
+    // catch-all below and every read is denied; keeping it in step with `workers`
+    // above means one batched edit cannot be half-allowed.
+    match /employees/{employeeId} {
+      allow read, write, delete: if request.auth != null;
+    }
+
+    // Self-service join requests. Anyone signed in may file one; the approver decides.
+    // A pending request can only be touched by its own owner until it is decided.
+    //
+    // `requestedBy` holds the filer's uid so ownership can be enforced. The admin form
+    // submits the request with that uid already stamped in, so the write below never
+    // fails the ownership check (previously it wrote the literal string 'admin').
+    match /employeeRequests/{requestId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.keys().hasOnly(['fullName', 'email', 'username', 'department', 'designation', 'joiningDate', 'status', 'requestedBy', 'role', 'createdAt'])
+                    && request.resource.data.requestedBy == request.auth.uid;
+      allow update: if isApprover()
+                    || (request.auth != null
+                        && resource.data.requestedBy == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']));
+      allow delete: if isApprover() || (request.auth != null && resource.data.requestedBy == request.auth.uid);
     }
 
     /* ------------------------------------------------------------------ *
@@ -129,7 +173,265 @@ service cloud.firestore {
                     || (request.auth != null && resource.data.recipientUid == request.auth.uid);
     }
 
-    // Everything else stays closed by default.
+    // Everything else stays closed by default. Note that the collections the app reads
+    /* ------------------------------------------------------------------ *
+     * ROBIUL GARMENTS ERP collections
+     * ------------------------------------------------------------------ *
+     *
+     * These must be declared BEFORE the catch-all deny above, otherwise every
+     * read and write against them falls through to it and fails.
+     *
+     * The role names below are the same 15 as src/config/erpRoles.js. Read, write
+     * and delete are listed separately because a supervisor who may record
+     * production must not be able to delete a purchase order.
+     */
+
+    // Roles with any ERP footprint at all.
+    function erpAllRoles() {
+      return ['super_admin', 'management', 'gm', 'merchandising', 'planning',
+              'production_manager', 'supervisor', 'qc', 'store', 'hr', 'accounts',
+              'maintenance', 'cutting', 'finishing', 'packing', 'shipment'];
+    }
+
+    function erpMgmtRoles()      { return ['super_admin', 'management', 'gm']; }
+    function erpOrderRoles()      { return ['super_admin', 'management', 'gm', 'merchandising', 'planning']; }
+    function erpProductionRoles() { return ['super_admin', 'production_manager', 'supervisor', 'cutting', 'finishing']; }
+    function erpQualityRoles()    { return ['super_admin', 'qc', 'production_manager', 'supervisor', 'finishing']; }
+    function erpStoreRoles()      { return ['super_admin', 'store']; }
+    function erpHrRoles()         { return ['super_admin', 'hr']; }
+    function erpMaintRoles()      { return ['super_admin', 'maintenance', 'production_manager']; }
+    function erpPackingRoles()    { return ['super_admin', 'packing']; }
+    function erpShipmentRoles()   { return ['super_admin', 'shipment', 'merchandising']; }
+    function erpAccountsRoles()   { return ['super_admin', 'accounts']; }
+
+    // ---- Audit log: append-only, and readable only by management ----
+    match /auditLogs/{entryId} {
+      // Read for the three management roles plus accounts.
+      allow get, list: if erpCanRead(erpMgmtRoles() + ['accounts']);
+      // Write for anyone the ERP recognises, because auditing must not be
+      // blocked by a module permission — but ONLY create: `update` and `delete`
+      // are simply not granted, so history cannot be altered or removed by
+      // anyone, including a super admin.
+      allow create: if erpCanRead(erpAllRoles());
+      allow update, delete: if false;
+    }
+
+    // ---- Alerts: the engine writes, management acknowledges ----
+    match /erpAlerts/{alertId} {
+      allow get, list: if erpCanRead(erpMgmtRoles() + ['production_manager', 'qc', 'store', 'planning', 'accounts', 'maintenance']);
+      allow create, update: if erpCanWrite(erpMgmtRoles() + ['production_manager']);
+      allow delete: if isErpSuperAdmin();
+    }
+
+    // ---- Buyer / order chain ----
+    match /buyers/{buyerId} {
+      allow get, list: if erpCanRead(erpOrderRoles() + ['shipment']);
+      allow create, update: if erpCanWrite(erpOrderRoles());
+      allow delete: if erpCanWrite(['super_admin', 'merchandising']);
+    }
+    match /buyerContacts/{contactId} {
+      allow get, list: if erpCanRead(erpOrderRoles());
+      allow create, update, delete: if erpCanWrite(erpOrderRoles());
+    }
+    match /orders/{orderId} {
+      allow get, list: if erpCanRead(erpOrderRoles() + ['shipment', 'packing', 'accounts']);
+      allow create, update: if erpCanWrite(erpOrderRoles());
+      allow delete: if erpCanWrite(['super_admin', 'merchandising']);
+    }
+    match /purchaseOrders/{poId} {
+      allow get, list: if erpCanRead(erpOrderRoles() + ['production_manager', 'packing', 'shipment', 'accounts']);
+      allow create, update: if erpCanWrite(erpOrderRoles());
+      allow delete: if erpCanWrite(['super_admin', 'merchandising']);
+    }
+    match /poLines/{lineId} {
+      allow get, list: if erpCanRead(erpOrderRoles() + ['production_manager', 'packing', 'shipment']);
+      allow create, update, delete: if erpCanWrite(erpOrderRoles());
+    }
+    match /styles/{styleId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update, delete: if erpCanWrite(['super_admin', 'merchandising', 'planning']);
+    }
+    match /colors/{colorId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update, delete: if erpCanWrite(['super_admin', 'merchandising', 'planning']);
+    }
+    match /sizes/{sizeId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update, delete: if erpCanWrite(['super_admin', 'merchandising', 'planning']);
+    }
+    match /tnaTasks/{taskId} {
+      allow get, list: if erpCanRead(erpOrderRoles() + ['production_manager']);
+      allow create, update: if erpCanWrite(erpOrderRoles());
+      allow delete: if erpCanWrite(['super_admin', 'planning']);
+    }
+
+    // ---- Production ----
+    match /productionLines/{lineId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update, delete: if erpCanWrite(['super_admin', 'production_manager', 'management']);
+    }
+    match /lineShifts/{shiftId} {
+      allow get, list: if erpCanRead(erpProductionRoles() + ['hr', 'gm', 'management']);
+      allow create, update, delete: if erpCanWrite(['super_admin', 'production_manager', 'supervisor']);
+    }
+    match /hourlyProduction/{entryId} {
+      // A supervisor records the hourly figure, so create/update is theirs; only a
+      // manager may delete an entry, because a deleted hour changes the day's
+      // achievement percentage that management already saw.
+      allow get, list: if erpCanRead(erpProductionRoles() + ['gm', 'management', 'qc']);
+      allow create, update: if erpCanWrite(erpProductionRoles());
+      allow delete: if erpCanWrite(['super_admin', 'production_manager', 'management']);
+    }
+    match /cuttingPlans/{planId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update, delete: if erpCanWrite(['super_admin', 'cutting', 'planning', 'production_manager']);
+    }
+    match /cuttingBatches/{batchId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update, delete: if erpCanWrite(['super_admin', 'cutting', 'production_manager']);
+    }
+
+    // ---- Quality ----
+    match /defectCategories/{categoryId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update, delete: if erpCanWrite(['super_admin', 'qc', 'management']);
+    }
+    match /inlineQc/{qcId} {
+      allow get, list: if erpCanRead(erpQualityRoles() + ['gm', 'management', 'production_manager']);
+      allow create, update: if erpCanWrite(['super_admin', 'qc', 'supervisor', 'finishing']);
+      allow delete: if erpCanWrite(['super_admin', 'qc']);
+    }
+    match /endLineQc/{qcId} {
+      allow get, list: if erpCanRead(erpQualityRoles() + ['gm', 'management']);
+      allow create, update, delete: if erpCanWrite(['super_admin', 'qc']);
+    }
+    match /finalInspections/{qcId} {
+      allow get, list: if erpCanRead(erpQualityRoles() + ['gm', 'management', 'shipment']);
+      allow create, update: if erpCanWrite(['super_admin', 'qc']);
+      allow delete: if erpCanWrite(['super_admin', 'qc']);
+    }
+
+    // ---- Store & inventory ----
+    match /stores/{storeId} {
+      allow get, list: if erpCanRead(erpStoreRoles() + ['gm', 'management']);
+      allow create, update, delete: if erpCanWrite(erpStoreRoles());
+    }
+    match /items/{itemId} {
+      allow get, list: if erpCanRead(erpStoreRoles() + ['gm', 'management', 'accounts', 'merchandising']);
+      allow create, update, delete: if erpCanWrite(erpStoreRoles());
+    }
+    match /stockLedger/{entryId} {
+      // A ledger entry is a fact about stock. It is never edited and never
+      // deleted: a correction is made by posting a new Adjustment entry, which is
+      // what keeps the running balance auditable.
+      allow get, list: if erpCanRead(erpStoreRoles() + ['gm', 'management', 'accounts']);
+      allow create: if erpCanWrite(erpStoreRoles());
+      allow update, delete: if false;
+    }
+    match /suppliers/{supplierId} {
+      allow get, list: if erpCanRead(erpStoreRoles() + ['merchandising', 'accounts', 'gm', 'management']);
+      allow create, update, delete: if erpCanWrite(['super_admin', 'merchandising', 'store']);
+    }
+    match /purchaseRequests/{requestId} {
+      allow get, list: if erpCanRead(erpStoreRoles() + ['merchandising', 'planning', 'accounts', 'gm', 'management']);
+      allow create, update: if erpCanWrite(erpStoreRoles() + ['planning', 'merchandising']);
+      allow delete: if erpCanWrite(['super_admin', 'merchandising']);
+    }
+    match /grns/{grnId} {
+      allow get, list: if erpCanRead(erpStoreRoles() + ['accounts', 'gm', 'management']);
+      allow create: if erpCanWrite(erpStoreRoles());
+      allow update, delete: if false;
+    }
+
+    // ---- HR ----
+    match /employeesErp/{employeeId} {
+      allow get, list: if erpCanRead(erpHrRoles() + ['gm', 'management', 'production_manager', 'accounts']);
+      allow create, update: if erpCanWrite(erpHrRoles());
+      allow delete: if erpCanWrite(erpHrRoles());
+    }
+    match /leaveRequests/{requestId} {
+      allow get, list: if erpCanRead(erpHrRoles() + ['gm', 'management', 'accounts']);
+      allow create, update: if erpCanWrite(erpHrRoles() + ['production_manager']);
+      allow delete: if erpCanWrite(['super_admin', 'hr']);
+    }
+    match /overtimeRequests/{requestId} {
+      allow get, list: if erpCanRead(erpHrRoles() + ['gm', 'management', 'accounts']);
+      allow create, update: if erpCanWrite(erpHrRoles() + ['production_manager']);
+      allow delete: if erpCanWrite(['super_admin', 'hr']);
+    }
+
+    // ---- Maintenance ----
+    match /machines/{machineId} {
+      allow get, list: if erpCanRead(erpMaintRoles() + ['gm', 'management', 'store']);
+      allow create, update, delete: if erpCanWrite(['super_admin', 'maintenance']);
+    }
+    match /maintenanceRequests/{requestId} {
+      allow get, list: if erpCanRead(erpMaintRoles() + ['gm', 'management', 'store']);
+      allow create: if erpCanWrite(erpMaintRoles() + ['production_manager', 'supervisor']);
+      // Only maintenance may change or close a repair, so a supervisor cannot
+      // declare a machine fixed.
+      allow update, delete: if erpCanWrite(['super_admin', 'maintenance']);
+    }
+
+    // ---- Packing & shipment ----
+    match /packingPlans/{planId} {
+      allow get, list: if erpCanRead(erpPackingRoles() + ['production_manager', 'shipment', 'gm', 'management']);
+      allow create, update, delete: if erpCanWrite(['super_admin', 'packing', 'production_manager']);
+    }
+    match /cartons/{cartonId} {
+      allow get, list: if erpCanRead(erpPackingRoles() + ['shipment', 'gm', 'management']);
+      allow create: if erpCanWrite(['super_admin', 'packing']);
+      // Packing and shipment both adjust a carton (quantity at packing, shipped
+      // quantity at dispatch), so both may update; neither may delete, because a
+      // deleted carton would silently shrink a shipment's contents.
+      allow update: if erpCanWrite(['super_admin', 'packing', 'shipment']);
+      allow delete: if erpCanWrite(['super_admin', 'packing']);
+    }
+    match /shipmentPlans/{shipmentId} {
+      allow get, list: if erpCanRead(erpShipmentRoles() + ['gm', 'management', 'packing', 'accounts']);
+      allow create, update: if erpCanWrite(['super_admin', 'shipment', 'merchandising']);
+      allow delete: if erpCanWrite(['super_admin', 'shipment']);
+    }
+
+    // ---- Accounts ----
+    match /costHeads/{costId} {
+      allow get, list: if erpCanRead(erpAccountsRoles() + ['gm', 'management']);
+      allow create, update, delete: if erpCanWrite(['super_admin', 'accounts']);
+    }
+    match /expenses/{expenseId} {
+      allow get, list: if erpCanRead(erpAccountsRoles() + ['gm', 'management']);
+      allow create: if erpCanWrite(erpAccountsRoles() + ['gm', 'management', 'merchandising']);
+      allow update, delete: if erpCanWrite(erpAccountsRoles());
+    }
+    match /erpApprovals/{approvalId} {
+      allow get, list: if erpCanRead(erpMgmtRoles() + ['accounts', 'store', 'hr']);
+      allow create: if erpCanRead(erpAllRoles());
+      allow update: if erpCanWrite(erpMgmtRoles() + ['accounts']);
+      allow delete: if false;
+    }
+    match /erpSettings/{settingId} {
+      allow get, list: if erpCanRead(erpMgmtRoles());
+      allow write: if isErpSuperAdmin();
+    }
+
+    /* ---- Natural-key index ----
+     * One document per unique value (PO number, employee id, carton number).
+     * The repository claims and releases these inside a transaction, which is what
+     * makes a duplicate PO number impossible under concurrency.
+     *
+     * Clients never touch it: `list` is denied so the key space cannot be read
+     * out, and `update`/`delete` are denied because only the transaction that
+     * created the document may remove it. */
+    match /uniqueKeys/{keyId} {
+      allow get: if erpCanRead(erpAllRoles());
+      allow create: if erpCanWrite(erpAllRoles());
+      allow list: if false;
+      allow update: if erpCanWrite(erpAllRoles());
+      allow delete: if erpCanWrite(erpAllRoles());
+    }
+
+    // (`employees`, `employeeRequests`) must have an explicit match above, otherwise every
+    // query against them is denied here.
     match /{document=**} {
       allow read, write: if false;
     }
@@ -155,6 +457,72 @@ service cloud.firestore {
       return request.auth != null
         && exists(/databases/$(database)/documents/managerDirectory/$(request.auth.uid))
         && get(/databases/$(database)/documents/managerDirectory/$(request.auth.uid)).data.status == 'approved';
+    }
+
+    /* ================================================================== *
+     * ROBIUL GARMENTS ERP — role based access control
+     * ================================================================== *
+     *
+     * The client already hides a control the user's role does not include, but
+     * the client is not trusted: these rules are the real enforcement. They read
+     * the same 15-role matrix as src/config/erpRoles.js, so a role the UI shows
+     * and a role the server honours can never drift apart.
+     *
+     * A user's ERP roles live on their own users/{uid} document as `erpRoles`
+     * (an array) or `erpRole` (a single string). They are written by the
+     * approver through the admin panel and are NOT self-servable: the user update
+     * rule above already refuses any change that touches them.
+     *
+     * These helpers back the per-collection ERP rules above.
+     */
+
+    function erpRoles() {
+      return request.auth == null
+        ? []
+        : get(/databases/$(database)/documents/users/$(request.auth.uid)).data.erpRoles;
+    }
+
+    /**
+     * The role list, guaranteed to be a list.
+     *
+     * Two details matter here:
+     *  - A missing `erpRoles` field (an account created before the ERP existed)
+     *    is treated as NO access, never as "access to everything". A missing
+     *    field that defaulted to permissive would hand every legacy user the
+     *    whole factory's data.
+     *  - It reads the user's document exactly ONCE. Firestore allows ten
+     *    document reads per rule evaluation, and a full 17-module x 6-action
+     *    matrix resolved through a helper would blow that budget on a single
+     *    write. The role list is therefore read once and the per-collection rule
+     *    below does the comparison against it.
+     */
+    function erpRolesOrEmpty() {
+      return request.auth == null
+        ? []
+        : (erpRoles() is list ? erpRoles() : []);
+    }
+
+    function isErpSuperAdmin() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true;
+    }
+
+    /**
+     * Read access to any module: a super admin, or a role from the allowed list.
+     */
+    function erpCanRead(rolesAllowed) {
+      return request.auth != null
+        && (isErpSuperAdmin() || erpRolesOrEmpty().hasAny(rolesAllowed));
+    }
+
+    /**
+     * Write access. Kept as a separate name from erpCanRead purely so each
+     * collection's rule reads as intent — "who may change this" — rather than as
+     * an unexplained duplicate condition.
+     */
+    function erpCanWrite(rolesAllowed) {
+      return request.auth != null
+        && (isErpSuperAdmin() || erpRolesOrEmpty().hasAny(rolesAllowed));
     }
   }
 }

@@ -66,13 +66,32 @@ export const menu = [
         userCanAdd: false,
         downloadable: true,
         autoTarget: true,
+        // The screen itself is the dedicated DailyProductionModule (a three-section
+        // Excel-template form + summary table). This field list survives as the
+        // recorded row shape: the first five keys are what every existing screen
+        // (Production Report, Line Status, Target vs Actual) reads, and the rest are
+        // additive. `quantity` is kept, and is mirrored from the day's good output
+        // on save, so nothing that already reads a daily-production row breaks.
         fields: [
-          { name: 'date', label: 'Date', type: 'date' },
-          { name: 'employee', label: 'Employee Name', type: 'employee-select' },
+          { name: 'date', label: 'Production Date', type: 'date' },
+          { name: 'employee', label: 'Line / Employee', type: 'employee-select' },
           { name: 'style', label: 'Style', type: 'style-select' },
           { name: 'department', label: 'Department', type: 'department-select' },
-          { name: 'process', label: 'Process', type: 'process-select', dependsOn: 'department' },
+          { name: 'process', label: 'Operation / Process', type: 'process-select', dependsOn: 'department' },
           { name: 'quantity', label: 'Quantity', type: 'number' },
+          { name: 'buyer', label: 'Buyer', type: 'buyer-select' },
+          { name: 'order_no', label: 'Order No', type: 'order-select' },
+          { name: 'item', label: 'Product / Item', type: 'text' },
+          { name: 'color', label: 'Color', type: 'color-select' },
+          { name: 'size_range', label: 'Size Range', type: 'text' },
+          { name: 'po_qty', label: 'PO Qty', type: 'number' },
+          { name: 'floor', label: 'Floor', type: 'floor-select' },
+          { name: 'line_no', label: 'Line No', type: 'text' },
+          { name: 'shift', label: 'Shift', type: 'shift-select' },
+          { name: 'supervisor', label: 'Supervisor', type: 'employee-select' },
+          { name: 'working_hours', label: 'Working Hours', type: 'number' },
+          { name: 'manpower', label: 'Manpower', type: 'number' },
+          { name: 'daily_target', label: 'Daily Target', type: 'number' },
         ],
       },
       {
@@ -102,6 +121,24 @@ export const menu = [
         icon: '⏱️',
         variant: 'hourly-timesheet',
         downloadable: true,
+        // A parent with children: the sidebar renders these nested underneath
+        // (and nests them for every other category too — this is not a special
+        // case). The parent itself is NOT clickable as a page when it has
+        // children; it expands. Its own view is still reachable at its route,
+        // so an existing bookmark to /production/hourly-production keeps working.
+        children: [
+          {
+            key: 'daily-production-entry',
+            label: 'Daily Production Entry',
+            icon: '📝',
+            // Rendered as a full page by DailyProductionEntry (see DataModule),
+            // which is the same three-section Hourly Production Tracking form the
+            // Daily Production screen opens in a modal.
+            variant: 'daily-production-entry',
+            userCanAdd: true,
+            downloadable: true,
+          },
+        ],
       },
       {
         key: 'target-vs-actual',
@@ -242,14 +279,9 @@ export const menu = [
         source: 'daily-attendance',
         downloadable: false,
       },
-      {
-        key: 'monthly-matrix',
-        label: 'Monthly Matrix',
-        icon: '📊',
-        variant: 'monthly-matrix',
-        source: 'daily-attendance',
-        downloadable: false,
-      },
+      // The "Monthly Metrics" entry that used to sit here has been removed: the monthly
+      // metrics are already rendered inside the Present / Absent view above, so a second
+      // sidebar link only duplicated the same screen.
       {
         key: 'late',
         label: 'Late',
@@ -288,6 +320,16 @@ export const menu = [
         variant: 'report',
         source: 'daily-attendance',
         downloadable: true,
+      },
+      {
+        // The Excel register lives in its own page (pages/AttendanceExport.jsx), so it
+        // carries a dedicated variant instead of the generic table renderer. Its key must
+        // stay in step with the `/attendance/${key}` route that App.jsx generates.
+        key: 'monthly-export',
+        label: 'Monthly Attendance Export',
+        icon: '📈',
+        variant: 'attendance-export',
+        downloadable: false,
       },
     ],
   },
@@ -495,6 +537,206 @@ export const menu = [
     ],
   },
 
+  // ============================================================
+  // PRODUCTION PLANNING & CONTROL — five sections that appear directly
+  // in the main sidebar, alongside Sewing, Cutting, Attendance and the
+  // rest. They are plain categories in this array, so the existing
+  // Sidebar and the router pick them up with no special casing: a
+  // category here is one expandable group in the drawer and one route
+  // per item in App.jsx.
+  // ============================================================
+  {
+    key: 'orders',
+    label: 'Order Management',
+    icon: '📑',
+    accent: '#f59e0b',
+    items: [
+      {
+        key: 'order-list',
+        label: 'Order List',
+        icon: '📋',
+        variant: 'table',
+        userCanAdd: true,
+        downloadable: true,
+        fields: [
+          { name: 'order_no', label: 'Order No', type: 'text' },
+          { name: 'buyer', label: 'Buyer', type: 'text' },
+          { name: 'style', label: 'Style', type: 'text' },
+          { name: 'qty', label: 'Order Qty', type: 'number' },
+          { name: 'order_date', label: 'Order Date', type: 'date' },
+          { name: 'ship_date', label: 'Delivery Date', type: 'date' },
+        ],
+      },
+      {
+        key: 'order-input',
+        label: 'Order Input',
+        icon: '📝',
+        variant: 'order-input',
+        userCanAdd: true,
+        downloadable: false,
+      },
+      {
+        // Sits directly under Order Input, because a process sheet belongs to an
+        // order: the operations it carries are linked back through the style.
+        key: 'process-upload',
+        label: 'Process Sheet Upload',
+        icon: '📤',
+        variant: 'process-upload',
+        userCanAdd: true,
+        downloadable: false,
+      },
+    ],
+  },
+
+  {
+    key: 'tna',
+    label: 'TNA Management',
+    icon: '🗓️',
+    accent: '#fb923c',
+    items: [
+      {
+        key: 'tna-calendar',
+        label: 'TNA Calendar',
+        icon: '📅',
+        variant: 'tna-calendar',
+        userCanAdd: true,
+        downloadable: true,
+      },
+      {
+        key: 'tna-tasks',
+        label: 'Action Tasks',
+        icon: '✅',
+        variant: 'table',
+        userCanAdd: true,
+        downloadable: true,
+        fields: [
+          { name: 'stage', label: 'Stage / Milestone', type: 'text' },
+          { name: 'order_no', label: 'Order No', type: 'text' },
+          { name: 'responsible', label: 'Responsible', type: 'text' },
+          { name: 'planned_date', label: 'Planned Date', type: 'date' },
+          { name: 'actual_date', label: 'Actual Date', type: 'date' },
+          { name: 'status', label: 'Status', type: 'select', options: ['Pending', 'In Progress', 'Completed', 'Delayed'] },
+        ],
+      },
+    ],
+  },
+
+  {
+    key: 'manpower',
+    label: 'Manpower Management',
+    icon: '🧑‍🏭',
+    accent: '#f472b6',
+    items: [
+      {
+        // The employee directory. This screen issues the Employee IDs that every
+        // other form in the app selects from, so it is a dedicated page rather
+        // than the generic field-driven table: a name and a generated ID are the
+        // whole record, and the old date/line/shift head-count grid was removed.
+        key: 'manpower-deployment',
+        label: 'Line Deployment',
+        icon: '👥',
+        variant: 'line-deployment',
+        userCanAdd: true,
+        downloadable: true,
+      },
+      {
+        key: 'manpower-absent',
+        label: 'Absenteeism',
+        icon: '🚫',
+        variant: 'table',
+        userCanAdd: false,
+        downloadable: true,
+        fields: [
+          { name: 'date', label: 'Date', type: 'date' },
+          { name: 'line', label: 'Line', type: 'text' },
+          { name: 'absent', label: 'Absent Count', type: 'number' },
+          { name: 'note', label: 'Note', type: 'text' },
+        ],
+      },
+    ],
+  },
+
+  {
+    key: 'operator',
+    label: 'Operator Performance',
+    icon: '👷',
+    accent: '#a855f7',
+    items: [
+      {
+        key: 'operator-output',
+        label: 'Operator Output',
+        icon: '🏭',
+        variant: 'table',
+        userCanAdd: true,
+        downloadable: true,
+        fields: [
+          { name: 'date', label: 'Date', type: 'date' },
+          { name: 'employee', label: 'Operator', type: 'employee-select' },
+          { name: 'line', label: 'Line', type: 'text' },
+          { name: 'process', label: 'Operation', type: 'process-select-all' },
+          { name: 'target', label: 'Target (pcs)', type: 'number' },
+          { name: 'achieved', label: 'Achieved (pcs)', type: 'number' },
+        ],
+      },
+      {
+        key: 'operator-efficiency',
+        label: 'Efficiency %',
+        icon: '📈',
+        variant: 'table',
+        userCanAdd: false,
+        downloadable: true,
+        diffCalc: { target: 'target', actual: 'achieved' },
+        fields: [
+          { name: 'date', label: 'Date', type: 'date' },
+          { name: 'employee', label: 'Operator', type: 'employee-select' },
+          { name: 'process', label: 'Operation', type: 'process-select-all' },
+          { name: 'target', label: 'Target', type: 'number' },
+          { name: 'achieved', label: 'Achieved', type: 'number' },
+        ],
+      },
+    ],
+  },
+
+  {
+    key: 'qc',
+    label: 'Quality Control',
+    icon: '🔍',
+    accent: '#22d3ee',
+    items: [
+      {
+        key: 'qc-check',
+        label: 'QC Check',
+        icon: '🧪',
+        variant: 'table',
+        userCanAdd: true,
+        downloadable: true,
+        fields: [
+          { name: 'date', label: 'Date', type: 'date' },
+          { name: 'line', label: 'Line', type: 'text' },
+          { name: 'process', label: 'Process Checked', type: 'process-select-all' },
+          { name: 'checked', label: 'Checked Qty', type: 'number' },
+          { name: 'passed', label: 'Passed Qty', type: 'number' },
+          { name: 'defect_qty', label: 'Defect Qty', type: 'number' },
+        ],
+      },
+      {
+        key: 'qc-defects',
+        label: 'Defect Tracking',
+        icon: '🐞',
+        variant: 'quality-control',
+        userCanAdd: true,
+        downloadable: true,
+        fields: [
+          { name: 'date', label: 'Date', type: 'date' },
+          { name: 'line', label: 'Line', type: 'text' },
+          { name: 'process', label: 'Process (where defect found)', type: 'process-select-all' },
+          { name: 'checked', label: 'Checked Qty', type: 'number' },
+          { name: 'defect_qty', label: 'Defect Qty', type: 'number' },
+        ],
+      },
+    ],
+  },
+
   {
     key: 'leave',
     label: 'Leave',
@@ -559,4 +801,74 @@ export function findModuleItem(catKey, itemKey) {
   const item = cat.items.find((i) => i.key === itemKey);
   if (!item) return null;
   return { category: cat, item };
+}
+
+// The single place a module URL is spelled out. The sidebar builds its click targets with
+// it and App.jsx builds its routes with it, so the two can never drift apart — a mismatch
+// there meant a sub-button navigated to a path no route matched and the catch-all bounced
+// the visitor back to the Dashboard.
+export function modulePath(catKey, itemKey) {
+  return `/${catKey}/${itemKey}`;
+}
+
+/**
+ * The URL of a nested sub-item, built from the same keys App.jsx generates the
+ * nested route with. Kept beside `modulePath` for the same reason: the sidebar's
+ * click target and the router's path are spelled out in one place, so a nested
+ * button can never navigate to a URL no route matches.
+ */
+export function childModulePath(catKey, parentKey, childKey) {
+  return `/${catKey}/${parentKey}/${childKey}`;
+}
+
+/**
+ * Every navigable target in the menu, flattened, as data.
+ *
+ * The router (App.jsx) and this file are the only two places that need to know
+ * the full path set, so it is derived here once rather than walked inline in the
+ * route table. A nested child is an entry of its own, carrying the parent it sits
+ * under, which is what lets the router pass `parentItem` to the page.
+ *
+ * `isParent` marks a top-level item that also has children: the sidebar renders
+ * it as a disclosure control, but it keeps its own route so an existing bookmark
+ * to the parent path still resolves.
+ */
+export function navigableTargets() {
+  const targets = [];
+  (Array.isArray(menu) ? menu : []).forEach((cat) => {
+    if (!cat?.key || !Array.isArray(cat.items)) return;
+    cat.items.forEach((item) => {
+      if (!item?.key) return;
+      const children = Array.isArray(item.children) ? item.children.filter((c) => c?.key) : [];
+      targets.push({
+        path: modulePath(cat.key, item.key),
+        category: cat,
+        item,
+        parentItem: null,
+        isParent: children.length > 0,
+        depth: 0,
+      });
+      children.forEach((child) => {
+        targets.push({
+          path: childModulePath(cat.key, item.key, child.key),
+          category: cat,
+          item: child,
+          parentItem: item,
+          isParent: false,
+          depth: 1,
+        });
+      });
+    });
+  });
+  return targets;
+}
+
+/**
+ * The nested children of one menu item, as clickable targets. Returns [] for an
+ * item with no children, so the sidebar can branch on `.length` alone.
+ */
+export function childTargetsOf(catKey, itemKey) {
+  return navigableTargets().filter(
+    (t) => t.depth === 1 && t.category?.key === catKey && t.parentItem?.key === itemKey,
+  );
 }

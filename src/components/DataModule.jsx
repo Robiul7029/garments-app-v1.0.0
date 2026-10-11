@@ -6,6 +6,7 @@ import { targetForProcess, dueLabel } from '../utils/calc';
 import FieldInput from './FieldInput';
 import AttendanceView from './AttendanceView';
 import SmartAttendance from '../pages/SmartAttendance';
+import AttendanceExport from '../pages/AttendanceExport';
 import LateAttendance from '../pages/LateAttendance';
 import LeaveAttendance from '../pages/LeaveAttendance';
 import AttendanceReport from '../pages/AttendanceReport';
@@ -14,14 +15,20 @@ import EmployeeTargetChart from './EmployeeTargetChart';
 import LineStatusView from './LineStatusView';
 import HourlyTimesheet from './HourlyTimesheet';
 import FinishingPlanView from './FinishingPlanView';
+import DailyProductionModule from './DailyProductionModule';
+import DailyProductionEntry from '../pages/DailyProductionEntry';
+import WorkerProductionPage from '../pages/WorkerProductionPage';
+import OrderInputPage from '../pages/OrderInputPage';
+import ProcessUploadPage from '../pages/ProcessUploadPage';
+import TnaCalendarPage from '../pages/TnaCalendarPage';
+import LineDeploymentPage from '../pages/LineDeploymentPage';
 import { ProductionReportView, CuttingReportView, FinishingReportView } from './ReportViews';
 import { SHORTFALL_REASONS } from '../config/menuConfig';
 import AttendanceSummaryDashboard from './AttendanceSummaryDashboard';
-import AttendanceMatrixGrid from './AttendanceMatrixGrid';
 
 const MONTHLY_TARGET = 10000;
 
-export default function DataModule({ category, item }) {
+export default function DataModule({ category, item, parentItem }) {
   const { getData, addEntry, updateEntry, deleteEntry } = useData();
   const { isAdmin } = useRole();
   const [showForm, setShowForm] = useState(false);
@@ -38,13 +45,40 @@ export default function DataModule({ category, item }) {
   const readOnly = openedReadOnly || !isAdmin;
 
   // ---- route to specialized views ----
-  if (item.variant === 'attendance') {
-    if (item.key === 'daily-attendance') return <SmartAttendance />;
-    if (item.key === 'late') return <LateAttendance />;
-    if (item.key === 'attendance-leave') return <LeaveAttendance />;
-    return <AttendanceView category={category} item={item} />;
-  }
+// The attendance screens are matched by their key first, not by the variant: `late` and
+// `attendance-leave` carry `variant: 'table'` in the config (they describe the shape of a
+// row, not the screen), so a variant-first check rendered the plain generic table and the
+// dedicated Late / Leave pages were unreachable even though the route existed.
+// Daily Production carries the full Excel-template form (three sections),
+// its own summary table and the styled workbook export, so it is routed to a
+// dedicated screen instead of the generic field-driven table below.
+if (item.key === 'daily-production') return <DailyProductionModule category={category} item={item} />;
+// Worker Production is its own entry screen: a supervisor picks the employee and
+// operation, the target is derived from the uploaded sheet's SMV, and only the
+// actual output and defects are typed. It writes to `daily-production`, so a
+// worker entry appears in the Daily Production summary immediately.
+if (item.key === 'worker-production') return <WorkerProductionPage category={category} item={item} />;
+// The sidebar's nested "Daily Production Entry" link lands here: the same
+// three-section Hourly Production Tracking form, rendered as a full page
+// rather than a modal, so every hour box is directly tabbable.
+if (item.variant === 'daily-production-entry') {
+  return <DailyProductionEntry category={category} item={item} parentItem={parentItem} />;
+}
+// Order Management and TNA Management screens. Each is routed here by its own
+// variant, the same way every other bespoke screen in this file is, so the
+// sidebar entry and the screen stay in step through menuConfig alone.
+if (item.variant === 'order-input') return <OrderInputPage category={category} item={item} />;
+if (item.variant === 'process-upload') return <ProcessUploadPage category={category} item={item} />;
+if (item.variant === 'tna-calendar') return <TnaCalendarPage category={category} item={item} />;
+// The employee directory — a name in, a generated Employee ID out. Every other
+// employee dropdown in the app selects from the list it maintains.
+if (item.variant === 'line-deployment') return <LineDeploymentPage category={category} item={item} />;
+if (item.key === 'daily-attendance') return <SmartAttendance />;
+  if (item.key === 'late') return <LateAttendance />;
+  if (item.key === 'attendance-leave') return <LeaveAttendance />;
   if (item.key === 'attendance-report') return <AttendanceReport />;
+  if (item.variant === 'attendance') return <AttendanceView category={category} item={item} />;
+  if (item.variant === 'attendance-export') return <AttendanceExport />;
   if (item.variant === 'quality-control') return <QualityControlView category={category} item={item} />;
   if (item.variant === 'employee-chart') return <EmployeeTargetChart item={item} />;
   if (item.variant === 'line-status') return <LineStatusView item={item} />;
@@ -217,8 +251,6 @@ function PresentAbsentView({ item }) {
     <div className="module">
       <div className="module-header"><h2>{item.icon} {item.label}</h2></div>
       <AttendanceSummaryDashboard />
-      <h3 className="section-sub">Monthly Attendance Matrix — {item.label}</h3>
-      <AttendanceMatrixGrid />
     </div>
   );
 }
@@ -227,7 +259,7 @@ function MonthlyMatrixView({ item }) {
   return (
     <div className="module">
       <div className="module-header"><h2>{item.icon} {item.label}</h2></div>
-      <AttendanceMatrixGrid />
+      <AttendanceSummaryDashboard />
     </div>
   );
 }

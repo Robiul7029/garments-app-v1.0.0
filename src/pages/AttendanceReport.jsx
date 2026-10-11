@@ -7,6 +7,21 @@ const COMPANY_NAME = 'ART BOUTIQUE SRL';
 const DEPARTMENTS = ['Cutting', 'Sewing', 'Finishing', 'Washing', 'Delivery', 'Iron', 'Other'];
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/** First and last ISO day of a YYYY-MM key. */
+function monthBounds(monthValue) {
+  const [year, month] = String(monthValue || '').split('-').map(Number);
+  if (!year || !month) return null;
+  return {
+    start: `${year}-${String(month).padStart(2, '0')}-01`,
+    end: isoDate(new Date(year, month, 0)),
+  };
+}
+
 function isoDate(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
@@ -35,6 +50,23 @@ function dayCode(status) {
   return '·';
 }
 
+// True when the 1-based day of the given YYYY-MM month lands on a Sunday. Built from a
+// local Date so the result always follows the month/year shown in the register.
+function isSundayDay(monthValue, day) {
+  const [year, month] = String(monthValue || '').split('-').map(Number);
+  if (!year || !month) return false;
+  return new Date(year, month - 1, day).getDay() === 0;
+}
+
+// Cell contents for one worker/day. A Sunday with no saved status is a holiday, so it
+// renders blank instead of the usual '·' placeholder; an explicit Sunday record (P/A/L)
+// is shown normally, and every non-Sunday keeps the '·'.
+function registerCell(monthValue, day, status) {
+  const hasStatus = Boolean(String(status || '').trim());
+  if (!hasStatus && isSundayDay(monthValue, day)) return '';
+  return dayCode(status);
+}
+
 export default function AttendanceReport() {
   const { isAdmin } = useRole();
   const initialRange = currentRange();
@@ -50,6 +82,9 @@ export default function AttendanceReport() {
   // official document is never narrowed by what happens to be on screen.
   const [search, setSearch] = useState('');
   const [department, setDepartment] = useState('');
+  // The Worker Summary's own month picker. Defaults to the running month and drives BOTH the
+  // summary preview and the printable register below it, so the two can never disagree.
+  const [summaryMonth, setSummaryMonth] = useState(currentMonthKey);
 
   useEffect(() => {
     async function loadReportData() {
@@ -103,11 +138,16 @@ export default function AttendanceReport() {
 
   // Hooks must run before the admin early-return below, so all derived data is
   // computed first and the guard stays where it was.
-  // The printable sheet is a single month, taken from the start date.
-  const registerYear = Number(String(startDate).slice(0, 4));
-  const registerMonthIndex = Number(String(startDate).slice(5, 7)) - 1;
-  const registerDays = daysInMonth(registerYear, registerMonthIndex);
-  const registerMonthKey = `${registerYear}-${String(registerMonthIndex + 1).padStart(2, '0')}`;
+  // The printable register is driven by the Worker Summary month picker, so the register and
+  // the preview above it always show the same month.
+  const registerYear = Number(String(summaryMonth).slice(0, 4));
+  const registerMonthIndex = Number(String(summaryMonth).slice(5, 7)) - 1;
+  const registerDays = Number.isFinite(registerYear) && Number.isFinite(registerMonthIndex)
+    ? daysInMonth(registerYear, registerMonthIndex)
+    : 0;
+  const registerMonthKey = summaryMonth;
+  // The Worker Summary preview reads exactly the month the register prints.
+  const summaryBounds = monthBounds(summaryMonth) || { start: startDate, end: endDate };
 
   const registerRows = useMemo(() => {
     const term = String(search || '').trim().toLowerCase();
@@ -153,17 +193,18 @@ export default function AttendanceReport() {
 
   const filteredSummary = useMemo(() => {
     const term = String(search || '').trim().toLowerCase();
-    return buildDateRangeReport(workers, records, startDate, endDate).summaryRows.filter((row) => {
+    return buildDateRangeReport(workers, records, summaryBounds.start, summaryBounds.end).summaryRows.filter((row) => {
       const matchesTerm = !term
         || String(row['Worker Name']).toLowerCase().includes(term)
         || String(row['Worker ID']).toLowerCase().includes(term);
       return matchesTerm && (!department || row.Department === department);
     });
-  }, [workers, records, startDate, endDate, search, department]);
+  }, [workers, records, summaryBounds.start, summaryBounds.end, search, department]);
 
   if (!isAdmin) return <div className="module"><div className="module-header"><h2>📊 Attendance Report</h2></div><div className="restricted-card"><p className="hint">Only approved managers can export attendance reports.</p></div></div>;
 
-  const preview = buildDateRangeReport(workers, records, startDate, endDate);
+  // Built from the summary month, so the record count under the preview matches the register.
+  const preview = buildDateRangeReport(workers, records, summaryBounds.start, summaryBounds.end);
   const registerPeriod = `${MONTH_NAMES[registerMonthIndex] || ''} ${registerYear}`.trim();
 
   return <div className="module attendance-report-page">
@@ -192,7 +233,9 @@ export default function AttendanceReport() {
     {exporting && <p className="report-progress">Preparing records and generating Excel workbook...</p>}
     {message && <p className="settings-success">{message}</p>}{error && <p className="auth-error">{error}</p>}
 
-    <div className="att-dash-cards report-kpi-cards">
+    // A 2-column grid on every screen size, so the four summary metrics always read as a
+    // tidy 2x2 block instead of one long vertical list.
+    <div className="att-dash-cards report-kpi-cards report-kpi-grid">
       <div className="att-card att-card-green"><span className="att-card-count">{registerRows.length}</span><span className="att-card-label">👷 Total Workers</span></div>
       <div className="att-card att-card-orange"><span className="att-card-count">{attendanceRate}%</span><span className="att-card-label">📈 Attendance Rate</span></div>
       <div className="att-card att-card-amber"><span className="att-card-count">{totals.overtime.toFixed(2)}</span><span className="att-card-label">⏰ Total OT Hours</span></div>
@@ -200,13 +243,14 @@ export default function AttendanceReport() {
     </div>
 
     <div className="attendance-toolbar report-filters">
+      <label className="form-field"><span>🗓️ Worker Summary Month</span><input type="month" value={summaryMonth} onChange={(event) => setSummaryMonth(event.target.value)} /></label>
       <label className="form-field"><span>🔎 Search Worker</span><input type="search" value={search} placeholder="Name or ID" onChange={(event) => setSearch(event.target.value)} /></label>
       <label className="form-field"><span>Department</span><select value={department} onChange={(event) => setDepartment(event.target.value)}><option value="">All Departments</option>{DEPARTMENTS.map((item) => <option key={item}>{item}</option>)}</select></label>
-      <span className="hint">Filters apply to the preview and the printable register below.</span>
+      <span className="hint">The month picker drives the Worker Summary preview and the printable register below — both follow it.</span>
     </div>
 
     <div className="report-preview">
-      <h3 className="section-sub">Worker Summary Preview</h3>
+      <h3 className="section-sub">Worker Summary Preview — {registerPeriod}</h3>
       <div className="table-wrap report-sticky-wrap">
         <table>
           <thead><tr><th>Worker ID</th><th>Worker Name</th><th>Department</th><th>Total Present</th><th>Total Late</th><th>Total Absent</th><th>Leave</th><th>Total OT Hours</th></tr></thead>
@@ -231,8 +275,8 @@ export default function AttendanceReport() {
         <table className="print-register-table">
           <thead>
             <tr>
-              <th rowSpan={2}>Worker ID</th>
-              <th rowSpan={2}>Worker Name</th>
+              <th rowSpan={2} className="print-register-sticky">Worker ID</th>
+              <th rowSpan={2} className="print-register-sticky print-register-sticky-name">Worker Name</th>
               <th rowSpan={2}>Department</th>
               <th colSpan={registerDays}>Daily Status (P = Present, A = Absent, L = Leave)</th>
               <th rowSpan={2}>Total Present</th>
@@ -240,15 +284,15 @@ export default function AttendanceReport() {
               <th rowSpan={2}>Total Late</th>
               <th rowSpan={2}>Total OT Hours</th>
             </tr>
-            <tr>{Array.from({ length: registerDays }, (_, index) => <th key={index + 1}>{index + 1}</th>)}</tr>
+            <tr>{Array.from({ length: registerDays }, (_, index) => <th key={index + 1} className={`print-register-sticky-head${isSundayDay(registerMonthKey, index + 1) ? ' print-register-sunday' : ''}`}>{index + 1}</th>)}</tr>
           </thead>
           <tbody>
             {registerRows.map((row) => (
               <tr key={row.workerId}>
-                <td>{row.workerId}</td>
-                <td className="print-register-name">{row.name}</td>
+                <td className="print-register-sticky">{row.workerId}</td>
+                <td className="print-register-name print-register-sticky print-register-sticky-name">{row.name}</td>
                 <td>{row.department}</td>
-                {Array.from({ length: registerDays }, (_, index) => <td key={index + 1} className="print-register-day">{dayCode(row.byDay[index + 1])}</td>)}
+                {Array.from({ length: registerDays }, (_, index) => { const sunday = isSundayDay(registerMonthKey, index + 1); return <td key={index + 1} className={`print-register-day${sunday ? ' print-register-sunday' : ''}`}>{registerCell(registerMonthKey, index + 1, row.byDay[index + 1])}</td>; })}
                 <td>{row.present}</td>
                 <td>{row.absent}</td>
                 <td>{row.late}</td>
@@ -259,7 +303,7 @@ export default function AttendanceReport() {
           </tbody>
           <tfoot>
             <tr>
-              <td colSpan={3}>TOTAL</td>
+              <td colSpan={3} className="print-register-sticky">TOTAL</td>
               {Array.from({ length: registerDays }, (_, index) => <td key={`total-${index + 1}`} />)}
               <td>{totals.present}</td>
               <td>{totals.absent}</td>

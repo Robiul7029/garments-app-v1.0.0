@@ -138,9 +138,15 @@ export function generateTotpSecret(byteLength = 20) {
 
 function base32Decode(input) {
   const clean = String(input || '').toUpperCase().replace(/=+$/, '').replace(/\s/g, '');
+  // Guard the alphabet itself: if this module were ever loaded out of order and the
+  // constant came through undefined, `undefined.indexOf` would throw the opaque
+  // "Cannot read properties of undefined (reading 'indexOf')". Failing with a clear
+  // message instead makes a misconfiguration diagnosable.
+  const alphabet = typeof BASE32_ALPHABET === 'string' ? BASE32_ALPHABET : '';
+  if (!alphabet) throw new Error('Authenticator support is unavailable. Please reload the page.');
   let bits = '';
   for (const char of clean) {
-    const index = BASE32_ALPHABET.indexOf(char);
+    const index = alphabet.indexOf(char);
     if (index === -1) throw new Error('Invalid authenticator secret.');
     bits += index.toString(2).padStart(5, '0');
   }

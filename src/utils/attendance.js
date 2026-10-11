@@ -10,7 +10,7 @@ export const STANDARD_WORKERS = [
   'Md Mirza Rahaman', 'Md Moyful Islam', 'Md Bashar', 'Md Delowar Hossain', 'Md Iqbal',
   'Md Mehedi', 'Md Badol', 'Md Siraj Mia', 'Md Monir Hossen', 'Md Rohidul', 'Md Najmul',
   'Md Sohidul', 'Md Hafijur', 'Masum', 'Md Olil', 'Md Saddam', 'Md Hossain Howlader',
-  'Md Mintu', 'Md Taijul', 'Md Rasel', 'Md Rasel (Suvo)',
+  'Md Mintu', 'Md Taijul', 'Md Rasel', 'Md Rasel (Suvo)','Md Himel',
 ].map((name, index) => ({
   workerId: index + 1,
   name,
@@ -188,6 +188,87 @@ export function subscribeToWorkers(onData, onError) {
       .filter((worker) => worker.active !== false)
       .sort((a, b) => Number(a.workerId) - Number(b.workerId)));
   }, onError);
+}
+
+// ---- Directory → Smart Attendance sync --------------------------------------
+//
+// Manpower Management → Line Deployment is the single place a worker is created.
+// These helpers are how that directory reaches the `workers` collection Smart
+// Attendance reads, so a person exists in ONE master list rather than two that
+// drift apart.
+//
+// The key that ties the two together is already the same on both sides: the
+// numeric tail of the Employee ID (EMP-007 → workerId 7). Writing the worker
+// document at `workers/{workerId}` therefore lands on the exact document an
+// attendance row for that person references — which is what keeps their history
+// attached when they are renamed.
+
+/**
+ * Writes (or refreshes) one worker in Firestore from a directory record.
+ *
+ * `setDoc` merges by default here so a worker document that carries fields the
+ * directory does not model (salary, designation added elsewhere) is not wiped by
+ * a rename. The identity fields — workerId, employeeId, name, active — always win,
+ * because the directory is the source of truth for them.
+ */
+export async function upsertWorkerFromDirectory(record) {
+  if (!record) return null;
+  const workerId = Number(record.workerId ?? record.employeeId?.replace(/\D/g, '')) || 0;
+  if (!workerId) return null; // an ID-less legacy name cannot key an attendance row
+  const docData = {
+    workerId,
+    employeeId: record.employeeId || '',
+    name: String(record.name || '').trim(),
+    department: record.department || '',
+    designation: record.designation || '',
+    basicSalary: Number(record.basicSalary) || 0,
+    active: record.active !== false && record.status !== 'inactive' && record.status !== 'archived',
+    status: record.status || 'active',
+    updatedAt: serverTimestamp(),
+  };
+  await setDoc(doc(db, 'workers', String(workerId)), docData, { merge: true });
+  return { id: String(workerId), ...docData };
+}
+
+/**
+ * Pushes a whole directory into the `workers` collection.
+ *
+ * Called after any directory write (add, rename, deactivate, reactivate). The
+ * mirror is rewritten for EVERY record rather than only the changed one: it is
+ * cheap at factory scale, and a status change has to reach the attendance screen
+ * (which filters on `active`) without a second code path that could be forgotten.
+ *
+ * Dormant records are written too — with `active: false` — rather than removed,
+ * because attendance rows already reference them and deleting the document would
+ * orphan that history.
+ */
+export async function syncDirectoryToWorkers(records = []) {
+  const results = await Promise.all(
+    (Array.isArray(records) ? records : []).map((record) => upsertWorkerFromDirectory(record)),
+  );
+  return results.filter(Boolean).length;
+}
+
+/**
+ * Renames a worker in Firestore, and every attendance row that names them.
+ *
+ * A rename must not need a bulk migration, so this updates the worker document
+ * AND the `userName` field on the worker's existing attendance rows. The rows are
+ * found by `workerId`, not by name, so they are matched regardless of what the
+ * old name was — which is exactly why the two modules key on the ID.
+ */
+export async function renameWorkerAndAttendance({ workerId, name }) {
+  const id = Number(workerId) || 0;
+  const clean = String(name || '').trim();
+  if (!id || !clean) return { worker: false, attendanceRows: 0 };
+
+  await setDoc(doc(db, 'workers', String(id)), { name: clean, updatedAt: serverTimestamp() }, { merge: true });
+
+  const snapshot = await getDocs(query(collection(db, 'attendance'), where('workerId', '==', id)));
+  await Promise.all(snapshot.docs.map((item) => (
+    updateDoc(doc(db, 'attendance', item.id), { userName: clean, updatedAt: serverTimestamp() })
+  )));
+  return { worker: true, attendanceRows: snapshot.size };
 }
 
 export function isInMonth(dateValue, year, monthIndex) {

@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useSecurity } from '../context/SecurityContext';
 
 export default function AuthScreen() {
-  const { login, signup, signupManager, verifyEmail, loginManager, authHint, sendPasswordReset } = useAuth();
+  const { login, signup, signupManager, verifyEmail, loginManager, loginWithIdentifier, authHint, sendPasswordReset } = useAuth();
   // 2FA, PIN, and fingerprint state. All of it is inactive until the user enables it in
   // Security Settings, so the screen looks and behaves exactly as before by default.
   const { quickLogin, verifyTwoFactorCode, unlockSavedCredential } = useSecurity();
@@ -97,7 +97,10 @@ export default function AuthScreen() {
     e.preventDefault();
     setError('');
     try {
-      await signInWithTwoFactor(() => login(identifier, password));
+      // Accepts an email OR a User ID: `loginWithIdentifier` routes to the ordinary account
+      // path for an address and to the manager lookup for a User ID, so a manager or staff
+      // member reaches their dashboard without choosing the right tab first.
+      await signInWithTwoFactor(() => loginWithIdentifier(identifier, password));
     } catch (err) {
       setError(err.message);
     }
@@ -164,16 +167,6 @@ export default function AuthScreen() {
 
   function switchTopTab(tab) {
     setTopTab(tab); setManagerMode('create'); setStep('form'); resetForm();
-  }
-
-  async function handleSignIn(e) {
-    e.preventDefault();
-    setError('');
-    try {
-      await login(identifier, password);
-    } catch (err) {
-      setError(err.message);
-    }
   }
 
   function openForgotPassword() {
@@ -299,7 +292,10 @@ export default function AuthScreen() {
 
         {topTab === 'signin' && (
           <form className="auth-form" onSubmit={handleSignIn}>
-            <label className="form-field"><span>Email address</span><input required value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="your@email.com" /></label>
+            {/* One field for both kinds of account: an email address signs in as an
+                ordinary account, a User ID signs in through the manager lookup. Typed as
+                plain text (not `type="email"`) because a User ID is not an address. */}
+            <label className="form-field"><span>Email address or User ID</span><input required value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="your@email.com or User ID" /></label>
             <label className="form-field"><span>Password</span><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" /></label>
             {forgotPasswordBlock()}
             {error && <p className="auth-error">{error}</p>}

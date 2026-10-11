@@ -10,7 +10,7 @@ import {
   deleteNotification,
   todayKey,
 } from '../services/notificationService';
-import { menu } from '../config/menuConfig';
+import { menu, modulePath } from '../config/menuConfig';
 
 // One place that records everything a user types in, feeds the bell notifications, and backs
 // the History screen. Firestore is the source of truth; localStorage is only an offline
@@ -32,7 +32,7 @@ const MODULE_INDEX = (() => {
         icon: item.icon,
         categoryLabel: cat.label,
         categoryKey: cat.key,
-        path: `/${cat.key}/${item.key}`,
+        path: modulePath(cat.key, item.key),
       };
     });
   });

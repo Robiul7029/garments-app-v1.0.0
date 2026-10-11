@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { saveLeaveRange, subscribeToAttendance, subscribeToWorkers } from '../utils/attendance';
+import AttendancePeriodFilter from '../components/AttendancePeriodFilter';
 
 const DEPARTMENTS = ['Cutting', 'Sewing', 'Finishing', 'Washing', 'Delivery', 'Iron', 'Other'];
 const LEAVE_TYPES = ['Casual Leave', 'Sick Leave', 'Earned Leave', 'Unpaid Leave', 'Maternity Leave', 'Other'];
@@ -82,10 +83,14 @@ export default function LeaveAttendance() {
     department: '',
     fromDate: todayKey(),
     toDate: todayKey(),
-    leaveType: 'Casual Leave',
+    // Empty by default: the Leave Type dropdown is required and starts on its placeholder.
+    leaveType: '',
     comment: '',
   });
   const [leaveError, setLeaveError] = useState('');
+  // Per-field validation state so each empty input can be highlighted and carry its own
+  // inline hint instead of a single generic message.
+  const [fieldErrors, setFieldErrors] = useState({});
 
   // Worker list for the modal's picker.
   useEffect(() => {
@@ -109,18 +114,39 @@ export default function LeaveAttendance() {
     };
   }, []);
 
+  // Every field is required. Submit is blocked while any one is empty, each empty control is
+// highlighted, and each carries its own inline hint saying exactly what is missing.
+  function validateLeaveForm() {
+    const errors = {};
+    if (!String(leaveForm.workerId || '').trim()) errors.workerId = 'Please select a worker.';
+    if (!String(leaveForm.department || '').trim()) errors.department = 'Please select a department.';
+    if (!String(leaveForm.fromDate || '').trim()) errors.fromDate = 'Please select a start date.';
+    if (!String(leaveForm.toDate || '').trim()) errors.toDate = 'Please select an end date.';
+    // A native <select> left on its placeholder is the classic empty case; the message is
+    // the one browsers show for it.
+    if (!String(leaveForm.leaveType || '').trim()) errors.leaveType = 'Please select an item in the list';
+    if (!String(leaveForm.comment || '').trim()) errors.comment = 'Please enter a reason for the leave.';
+    return errors;
+  }
+
+  function updateLeaveField(field, value) {
+    setLeaveForm((current) => ({ ...current, [field]: value }));
+    // Clear a field's hint as soon as the user starts fixing it.
+    setFieldErrors((current) => (current[field] ? { ...current, [field]: '' } : current));
+  }
+
   async function handleSaveLeave(event) {
     event.preventDefault();
     setLeaveError('');
-    if (!leaveForm.workerId) {
-      setLeaveError('Please select a worker.');
+    const errors = validateLeaveForm();
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setLeaveError('Please complete all required fields before saving.');
       return;
     }
-    if (!leaveForm.fromDate) {
-      setLeaveError('Please select a start date.');
-      return;
-    }
+    setFieldErrors({});
     if (leaveForm.toDate && leaveForm.toDate < leaveForm.fromDate) {
+      setFieldErrors({ toDate: 'The end date cannot be before the start date.' });
       setLeaveError('The end date cannot be before the start date.');
       return;
     }
@@ -140,7 +166,8 @@ export default function LeaveAttendance() {
         comment: leaveForm.comment,
       });
       setShowAddModal(false);
-      setLeaveForm({ workerId: '', department: '', fromDate: todayKey(), toDate: todayKey(), leaveType: 'Casual Leave', comment: '' });
+      setLeaveForm({ workerId: '', department: '', fromDate: todayKey(), toDate: todayKey(), leaveType: '', comment: '' });
+      setFieldErrors({});
       // The onSnapshot above refreshes the table on its own; this is just feedback.
       if (!result.created.length) {
         setLeaveError('Those days already have an attendance record — nothing was overwritten.');
@@ -183,6 +210,18 @@ export default function LeaveAttendance() {
       unsubscribe();
     };
   }, []);
+
+  // Picking a day drops into the single-date view, clearing it returns to the whole month.
+  const handleFilterDateChange = (value) => {
+    setViewMode(value ? 'day' : 'month');
+    setSelectedDate(value || todayKey());
+    if (value) setSelectedMonth(value.slice(0, 7));
+  };
+  const handleFilterMonthChange = (value) => {
+    setViewMode('month');
+    setSelectedMonth(value);
+    if (selectedDate && selectedDate.slice(0, 7) !== value) setSelectedDate(todayKey());
+  };
 
   const allLeaves = useMemo(() => (records || []).filter((record) => record && isLeaveRecord(record)), [records]);
 
@@ -241,23 +280,17 @@ export default function LeaveAttendance() {
           </button>
         </div>
 
-        {viewMode === 'day' ? (
-          <label className="form-field">
-            <span>Date</span>
-            <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
-          </label>
-        ) : (
-          <label className="form-field">
-            <span>Month</span>
-            <input type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} />
-          </label>
-        )}
-        <label className="form-field">
-          <span>Search Employee</span>
-          <input type="text" value={search} placeholder="Name or ID" onChange={(event) => setSearch(event.target.value)} />
-        </label>
+        <AttendancePeriodFilter
+          month={selectedMonth}
+          onMonthChange={handleFilterMonthChange}
+          date={viewMode === 'day' ? selectedDate : ''}
+          onDateChange={handleFilterDateChange}
+          search={search}
+          onSearchChange={setSearch}
+          label="Leave attendance filter"
+        />
 
-        <button className="btn btn-primary" onClick={() => { setLeaveError(''); setShowAddModal(true); }}>
+        <button className="btn btn-primary" onClick={() => { setLeaveError(''); setFieldErrors({}); setShowAddModal(true); }}>
           + Add Entry
         </button>
       </div>
@@ -322,48 +355,56 @@ export default function LeaveAttendance() {
             <div className="attendance-modal-header">
               <div>
                 <h2>Add Leave Entry</h2>
-                <p className="hint">Records an advance leave across a date range.</p>
+                <p className="hint">Records an advance leave across a date range. One record is written per day; days that already have attendance are left untouched.</p>
               </div>
               <button className="btn btn-outline" onClick={() => setShowAddModal(false)}>Close</button>
             </div>
 
-            <form className="attendance-entry-form" onSubmit={handleSaveLeave}>
-              <label className="form-field">
-                <span>Worker</span>
-                <select value={leaveForm.workerId} onChange={(event) => setLeaveForm({ ...leaveForm, workerId: event.target.value })} required>
+            <form className="attendance-entry-form" onSubmit={handleSaveLeave} noValidate>
+              <label className={`form-field ${fieldErrors.workerId ? 'is-invalid' : ''}`}>
+                <span>Worker <em className="required-mark">*</em></span>
+                <select value={leaveForm.workerId} aria-invalid={Boolean(fieldErrors.workerId)} onChange={(event) => updateLeaveField('workerId', event.target.value)}>
                   <option value="">Select worker</option>
                   {workers.map((worker) => (
                     <option key={worker.workerId} value={worker.workerId}>{worker.workerId} — {worker.name}</option>
                   ))}
                 </select>
+                {fieldErrors.workerId && <small className="field-error">{fieldErrors.workerId}</small>}
               </label>
-              <label className="form-field">
-                <span>Department</span>
-                <select value={leaveForm.department} onChange={(event) => setLeaveForm({ ...leaveForm, department: event.target.value })}>
-                  <option value="">Same as worker profile</option>
+              <label className={`form-field ${fieldErrors.department ? 'is-invalid' : ''}`}>
+                <span>Department <em className="required-mark">*</em></span>
+                <select value={leaveForm.department} aria-invalid={Boolean(fieldErrors.department)} onChange={(event) => updateLeaveField('department', event.target.value)}>
+                  <option value="">Select department</option>
                   {DEPARTMENTS.map((department) => <option key={department}>{department}</option>)}
                 </select>
+                {fieldErrors.department && <small className="field-error">{fieldErrors.department}</small>}
               </label>
-              <label className="form-field">
-                <span>From Date</span>
-                <input type="date" value={leaveForm.fromDate} onChange={(event) => setLeaveForm({ ...leaveForm, fromDate: event.target.value })} required />
+              <label className={`form-field ${fieldErrors.fromDate ? 'is-invalid' : ''}`}>
+                <span>From Date <em className="required-mark">*</em></span>
+                <input type="date" value={leaveForm.fromDate} aria-invalid={Boolean(fieldErrors.fromDate)} onChange={(event) => updateLeaveField('fromDate', event.target.value)} />
+                {fieldErrors.fromDate && <small className="field-error">{fieldErrors.fromDate}</small>}
               </label>
-              <label className="form-field">
-                <span>To Date</span>
-                <input type="date" value={leaveForm.toDate} min={leaveForm.fromDate} onChange={(event) => setLeaveForm({ ...leaveForm, toDate: event.target.value })} />
+              <label className={`form-field ${fieldErrors.toDate ? 'is-invalid' : ''}`}>
+                <span>To Date <em className="required-mark">*</em></span>
+                <input type="date" value={leaveForm.toDate} min={leaveForm.fromDate} aria-invalid={Boolean(fieldErrors.toDate)} onChange={(event) => updateLeaveField('toDate', event.target.value)} />
+                {fieldErrors.toDate && <small className="field-error">{fieldErrors.toDate}</small>}
               </label>
-              <label className="form-field">
-                <span>Leave Type</span>
-                <select value={leaveForm.leaveType} onChange={(event) => setLeaveForm({ ...leaveForm, leaveType: event.target.value })}>
+              <label className={`form-field ${fieldErrors.leaveType ? 'is-invalid' : ''}`}>
+                <span>Leave Type <em className="required-mark">*</em></span>
+                <select value={leaveForm.leaveType} aria-invalid={Boolean(fieldErrors.leaveType)} onChange={(event) => updateLeaveField('leaveType', event.target.value)}>
+                  <option value="">Select Leave Type</option>
                   {LEAVE_TYPES.map((type) => <option key={type}>{type}</option>)}
                 </select>
+                {fieldErrors.leaveType && <small className="field-error">{fieldErrors.leaveType}</small>}
               </label>
-              <label className="form-field">
-                <span>Comment</span>
-                <input type="text" value={leaveForm.comment} placeholder="Reason for leave" onChange={(event) => setLeaveForm({ ...leaveForm, comment: event.target.value })} />
+              <label className={`form-field ${fieldErrors.comment ? 'is-invalid' : ''}`}>
+                <span>Comment / Reason <em className="required-mark">*</em></span>
+                <input type="text" value={leaveForm.comment} placeholder="Reason for leave" aria-invalid={Boolean(fieldErrors.comment)} onChange={(event) => updateLeaveField('comment', event.target.value)} />
+                {fieldErrors.comment && <small className="field-error">{fieldErrors.comment}</small>}
               </label>
+              {/* The actions row is intentionally empty apart from the Save button: no stray
+                  helper or background text sits above it. */}
               <div className="attendance-entry-actions">
-                <span className="hint">One record is written per day in the range. Days that already have attendance are left untouched.</span>
                 <button className="btn btn-primary" type="submit" disabled={savingLeave}>{savingLeave ? 'Saving...' : 'Save Leave'}</button>
               </div>
             </form>

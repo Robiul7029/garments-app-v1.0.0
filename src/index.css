@@ -196,6 +196,16 @@ body {
 .notif-toast-error { border-color: #f87171; }
 @keyframes notifToastIn { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @keyframes notifToastTimer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+/* Inline validation message on the auth screens. Used instead of the browser's native
+   "Please include an '@'" tooltip (which is suppressed with `noValidate`), so the wording
+   matches the app and the failure is styled like the rest of the form. */
+.auth-field-error {
+  color: #f87171; font-size: 12px; margin: 0;
+  display: flex; align-items: center; gap: 6px;
+}
+.auth-field-error::before { content: '⚠'; font-size: 13px; }
+.auth-input-invalid { border-color: #f87171 !important; }
 .notif-item { padding: 8px 10px; font-size: 12px; color: #c7ceD6; border-radius: 6px; }
 .notif-item:hover { background: #171f29; }
 .notif-approve { display: flex; flex-direction: column; gap: 6px; }
@@ -210,9 +220,12 @@ body {
 .notif-page-item { background: #11161d; border: 1px solid #1c2530; border-radius: 10px; padding: 12px 14px; font-size: 13px; color: #c7ceD6; }
 .notif-page-item.notif-approve { display: flex; flex-direction: column; gap: 10px; }
 
-/* Welcome splash */
+/* Welcome splash — purely decorative, so it must never swallow a click meant for the
+   app underneath it. Without `pointer-events: none` the overlay eats every tap during
+   the 900ms it is on screen, which is exactly why buttons looked dead on first load. */
 .welcome-splash {
   position: fixed; inset: 0; background: rgba(11,15,20,0.92); z-index: 100;
+  pointer-events: none;
   display: flex; align-items: center; justify-content: center;
   animation: fadeOut 0.9s ease forwards;
 }
@@ -221,6 +234,25 @@ body {
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 @keyframes fadeOut { 0% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+
+/* Auth loading spinner — shown by ProtectedRoute while Firebase Auth resolves, so the
+   dashboard chrome is never painted before the session is known. */
+.auth-loading-card { text-align: center; }
+
+/* While the auth role is still resolving the ☰ button is disabled, not hidden: it stays
+   in place for the layout but does not accept a click that would open a drawer built
+   from a menu the user may not have. */
+.dots-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.auth-loading { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px 0 6px; }
+.auth-spinner {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 3px solid #1c2530; border-top-color: #f59e0b;
+  animation: authSpin 0.8s linear infinite;
+}
+@keyframes authSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .auth-spinner { animation-duration: 2.4s; }
+}
 
 /* Pending approval banner */
 .pending-banner {
@@ -388,6 +420,47 @@ body {
 
 /* ---------- Attendance report: KPIs, filters, printable register ---------- */
 .report-kpi-cards { margin-bottom: 16px; }
+/* 2x2 metric grid: exactly two cards per row, on mobile and desktop alike. */
+/* Two classes so this wins over the later `.att-dash-cards { display: flex }` rule. */
+.att-dash-cards.report-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.report-kpi-grid .att-card { width: 100%; }
+@media (max-width: 640px) {
+  .att-dash-cards.report-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+}
+
+/* Floating month / date / search box for the attendance views. It is a plain block inside
+   each view's own toolbar, so it is mounted and unmounted with that view automatically. */
+.att-period-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  background: #11161d;
+  border: 1px solid #1c2530;
+  border-radius: 12px;
+}
+.att-period-filter-right { justify-content: flex-end; }
+.att-period-filter-left { justify-content: flex-start; }
+@media (max-width: 640px) {
+  .att-period-filter { justify-content: stretch; }
+  .att-period-filter .form-field { flex: 1 1 100%; }
+}
+
+/* Required-field highlighting for the Leave entry form. */
+.form-field.is-invalid input,
+.form-field.is-invalid select,
+.form-field.is-invalid textarea {
+  border-color: #f87171;
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.15);
+}
+.required-mark { color: #f87171; font-style: normal; margin-left: 2px; }
+.field-error { display: block; margin-top: 4px; color: #fca5a5; font-size: 11px; font-weight: 600; }
 .report-filters { margin-bottom: 16px; }
 .report-action-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
 .report-sticky-wrap { position: relative; max-height: 460px; overflow-y: auto; overflow-x: auto; }
@@ -410,7 +483,30 @@ body {
 .print-register-company { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.06em; }
 .print-register-title { margin: 4px 0 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.16em; color: #93a1b1; }
 .print-register-period { margin: 6px 0 0; font-size: 13px; color: #cbd5e1; }
-.print-register-table-wrap { overflow-x: auto; }
+.print-register-table-wrap { overflow-x: auto; max-height: 70vh; }
+/* Frozen header + Worker ID / Name while the day columns are scrolled horizontally.
+   The header sits on top of the frozen body cells, so the z-index order is explicit. */
+.print-register-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #17202a;
+}
+.print-register-table thead .print-register-sticky { z-index: 5; }
+.print-register-table .print-register-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #17202a;
+  white-space: nowrap;
+}
+.print-register-table .print-register-sticky-name { left: 90px; }
+.print-register-table tfoot .print-register-sticky { z-index: 2; background: #17202a; }
+/* Never freeze anything on paper — a printed sheet has no scroll region. */
+@media print {
+  .print-register-table thead th,
+  .print-register-table .print-register-sticky { position: static; }
+}
 .print-register-table { width: 100%; font-size: 11px; }
 .print-register-table th,
 .print-register-table td {
@@ -423,6 +519,15 @@ body {
 .print-register-name { text-align: left; font-weight: 600; }
 .print-register-day { font-family: 'JetBrains Mono', monospace; font-weight: 700; }
 .print-register-table tfoot td { background: #17202a; font-weight: 800; }
+/* Sunday columns are marked as weekend across the whole column — header, body and total row
+   — with a subtle muted crimson tint. The header text and the P/A/L codes are left untouched,
+   only the background changes, so the number-only header format is preserved. An empty Sunday
+   cell stays blank via registerCell(). Declared last so it wins over the plain tfoot/thead
+   backgrounds above. */
+.print-register-table th.print-register-sunday,
+.print-register-table td.print-register-sunday { background: rgba(153, 27, 27, 0.35); }
+.print-register-table thead th.print-register-sunday { background: #7f1d1d; }
+.print-register-table tfoot td.print-register-sunday { background: #5b1414; }
 .print-register-meta {
   display: flex;
   flex-wrap: wrap;
@@ -465,6 +570,10 @@ body {
   .print-register-meta { background: #fff; border-color: #000; }
   .print-notes-rule { border-bottom-color: #000; }
   .print-register-table th, .print-register-table td { border-color: #000; background: #fff; color: #000; }
+  /* Keep the Sunday weekend marking on paper as a faint grey tint instead of a colour fill,
+     so the printed sheet stays legible in black and white. */
+  .print-register-table th.print-register-sunday,
+  .print-register-table td.print-register-sunday { background: #ededed; }
   .print-register-table thead { display: table-header-group; }
   .print-register-table tfoot { display: table-footer-group; }
   .print-register-table tr { page-break-inside: avoid; }
@@ -488,7 +597,22 @@ body {
 .form-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #9aa5b1; }
 .form-field input, .form-field select, .form-field textarea { background: #0b0f14; border: 1px solid #263140; border-radius: 6px; padding: 8px 10px; color: #e6e9ed; font-size: 13px; font-family: inherit; }
 .form-field input:disabled, .form-field select:disabled { opacity: 0.5; }
+/* Red asterisk marking a required field in the employee form. */
+.req-star { color: #f87171; font-weight: 700; }
 .form-actions { grid-column: 1 / -1; display: flex; gap: 10px; margin-top: 4px; }
+
+/* Searchable worker picker: an input with a floating result list, styled to match the
+   plain form fields it replaced. */
+.worker-combobox { position: relative; }
+.worker-combobox input { width: 100%; }
+.worker-combobox input[aria-invalid="true"] { border-color: #f87171; }
+.worker-combobox-list { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; right: 0; max-height: 240px; overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: #0b0f14; border: 1px solid #263140; border-radius: 8px; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45); }
+.worker-combobox-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 6px; font-size: 13px; color: #e6e9ed; cursor: pointer; }
+.worker-combobox-option.is-highlighted { background: #16202b; }
+.worker-combobox-option.is-selected { color: #7dd3fc; }
+.worker-combobox-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worker-combobox-id { flex: none; color: #5b6b7c; font-size: 11px; }
+.worker-combobox-empty { padding: 8px 10px; color: #5b6b7c; font-size: 12px; }
 .auto-note { color: #5b6b7c; font-style: normal; font-size: 10px; }
 
 /* Table */
@@ -594,6 +718,9 @@ td { padding: 10px 12px; border-bottom: 1px solid #161d26; color: #c7ceD6; }
 /* ---- Profile modal ---- */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(4, 7, 11, 0.72); z-index: 70; display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px; overflow-y: auto; }
 .profile-modal { width: 100%; max-width: 560px; background: #11161d; border: 1px solid #1c2530; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+/* Small centred confirm dialog (delete / mark-inactive). */
+.modal-card { width: 100%; max-width: 420px; margin-top: 10vh; background: #11161d; border: 1px solid #1c2530; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .profile-modal-head { display: flex; align-items: center; justify-content: space-between; }
 .profile-modal-head h2 { margin: 0; font-size: 18px; }
 .modal-close { background: transparent; border: 1px solid #1c2530; color: #9aa5b1; width: 30px; height: 30px; border-radius: 8px; cursor: pointer; }
@@ -609,6 +736,11 @@ td { padding: 10px 12px; border-bottom: 1px solid #161d26; color: #c7ceD6; }
 .profile-avatar-role { color: #7f8b99; font-size: 12px; }
 .hidden-file-input { display: none; }
 .profile-modal-actions { justify-content: space-between; align-items: center; }
+
+/* ---- Confirmation modal (log out / switch account) ---- */
+.confirm-modal { max-width: 420px; }
+.confirm-modal-text { margin: 0; color: #c7ced6; font-size: 14px; line-height: 1.6; }
+.confirm-modal-actions { justify-content: flex-end; gap: 10px; }
 .settings-list { margin: 0 0 12px; padding-left: 18px; color: #c7ced6; font-size: 13px; line-height: 1.7; }
 
 /* ---- Notifications ---- */
@@ -679,6 +811,7 @@ td { padding: 10px 12px; border-bottom: 1px solid #161d26; color: #c7ceD6; }
   font-size: 13px;
 }
 .att-id { font-family: 'JetBrains Mono', monospace; color: #7dd3fc; }
+.att-serial { color: #93a1b1; font-variant-numeric: tabular-nums; width: 48px; }
 .att-name { font-weight: 600; }
 .att-dept, .att-time { color: #93a1b1; }
 .att-reason { color: #fbbf24; text-align: right; }
@@ -686,6 +819,11 @@ td { padding: 10px 12px; border-bottom: 1px solid #161d26; color: #c7ceD6; }
   .att-list-row { grid-template-columns: 70px 1fr; }
   .att-reason { grid-column: 1 / -1; text-align: left; }
 }
+
+/* Shown after an automatic sign-out (e.g. the admin 3-minute inactivity rule). */
+.auth-session-notice { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid #f59e0b; border-radius: 8px; background: rgba(245,158,11,0.12); color: #fcd34d; font-size: 12px; font-weight: 700; }
+.auth-session-notice-text { flex: 1; }
+.auth-session-notice-close { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; }
 
 /* ---------- Monthly Attendance Matrix Grid (Excel style) ---------- */
 /* Exact palette requested: odd rows #8cbcd0, even rows #b8d8e6, header #d5e5ed,
@@ -727,6 +865,19 @@ td { padding: 10px 12px; border-bottom: 1px solid #161d26; color: #c7ceD6; }
 }
 .att-matrix-day-head { min-width: 78px; }
 .att-matrix-day-head.is-future { color: #7c8fa0; }
+/* Sunday columns are flagged as weekend: a red header cell, plus a soft tint down the
+   whole column so the day stands out while scanning a row. Declared after .is-future so
+   a future Sunday still reads as a Sunday rather than fading to the grey future colour. */
+.att-matrix-day-head.is-sunday { background: #c0392b; color: #ffffff; }
+.att-matrix-table tbody td.att-matrix-sunday-cell { background: rgba(192, 57, 43, 0.16); }
+.att-row-odd .att-matrix-sunday-cell { background: rgba(192, 57, 43, 0.2); }
+.att-row-even .att-matrix-sunday-cell { background: rgba(192, 57, 43, 0.14); }
+/* A Sunday with no saved record is a holiday cell: left empty, only the weekend tint marks
+   it, so it never renders a column of "N/A" text. An explicit Sunday record keeps the
+   normal cell styling and wins over this rule. */
+.att-matrix-cell.att-cell-holiday { background: rgba(192, 57, 43, 0.18); }
+.att-row-odd .att-matrix-cell.att-cell-holiday { background: rgba(192, 57, 43, 0.22); }
+.att-row-even .att-matrix-cell.att-cell-holiday { background: rgba(192, 57, 43, 0.16); }
 /* Sticky first column — background is set per row so the zebra colour shows through
    the scroll region instead of the page behind it. */
 .att-matrix-sticky-col {
@@ -753,9 +904,730 @@ td { padding: 10px 12px; border-bottom: 1px solid #161d26; color: #c7ceD6; }
 .att-cell-present { color: #0b3d16; }
 .att-cell-absent { color: #7a0f0f; }
 .att-cell-late { color: #6b3c00; }
+.att-cell-leave { color: #7a4a00; }
+/* Days with no saved Smart Attendance entry. */
+.att-cell-none .att-cell-status, .att-cell-none .att-cell-time, .att-cell-none .att-cell-dept { color: #4a6a7d; font-weight: 600; }
+/* Cells filtered out by an active summary card are blanked, not removed. */
+.att-cell-muted { background: rgba(255, 255, 255, 0.28); }
+/* ---- Late Attendance matrix cells ---- */
+.att-cell-late-filled { position: relative; color: #4a1d00; text-align: left; }
+.att-cell-late-in, .att-cell-late-out, .att-cell-late-min { display: block; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; line-height: 1.35; }
+.att-cell-late-min { font-family: inherit; font-weight: 800; margin-top: 1px; }
+.att-cell-late-na { display: block; color: #4a6a7d; font-weight: 600; }
+.att-cell-late-del { position: absolute; top: 1px; right: 1px; border: 0; background: transparent; color: #7a0f0f; cursor: pointer; font-size: 11px; line-height: 1; padding: 1px 2px; border-radius: 4px; }
+.att-cell-late-del:hover:not(:disabled) { background: rgba(122, 15, 15, 0.12); }
+.att-cell-late-del:disabled { opacity: 0.5; cursor: default; }
 .att-matrix-table .empty-row {
   background: #b8d8e6;
   color: #000000;
   text-align: center;
   padding: 14px;
 }
+
+/* ============================================================
+   DAILY PRODUCTION — Excel-template form, summary table & export.
+   All classes are `dp-` prefixed so nothing here can reach the
+   attendance, admin or ERP screens. Palette matches the existing
+   dark shell (#0b0f14 / #11161d / #1c2530 / #e6e9ed).
+   ============================================================ */
+
+/* ---- Row tone helpers (also used by the table) ---- */
+.dp-good { color: #34d399; }
+.dp-warn { color: #fbbf24; }
+.dp-bad { color: #f87171; }
+
+/* ---- Summary table ---- */
+.dp-table td, .dp-table th { vertical-align: middle; }
+.dp-table .row-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.dp-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.dp-status-good { color: #34d399; }
+.dp-status-warn { color: #fbbf24; }
+.dp-status-bad { color: #f87171; }
+.btn-sm { padding: 6px 10px; font-size: 12px; }
+
+/* ---- Modal ---- */
+.dp-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(6, 12, 18, 0.78);
+  display: flex; align-items: flex-start; justify-content: center;
+  z-index: 1000; padding: 24px 16px; overflow-y: auto;
+}
+.dp-modal {
+  background: #11161d; border: 1px solid #1c2530; border-radius: 12px;
+  width: 100%; max-width: 560px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  margin: auto 0;
+}
+.dp-modal-wide { max-width: 1120px; }
+.dp-modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px 18px; border-bottom: 1px solid #1c2530; position: sticky; top: 0;
+  background: #11161d; border-radius: 12px 12px 0 0; z-index: 1;
+}
+.dp-modal-head h3 { margin: 0; font-size: 16px; color: #e6e9ed; }
+.dp-modal-close {
+  background: transparent; border: none; color: #9aa5b1; font-size: 24px;
+  line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.dp-modal-close:hover { color: #e6e9ed; }
+.dp-modal-body { padding: 18px; }
+
+/* ---- Form shell & sections ---- */
+.dp-form { display: block; }
+.dp-section { margin-bottom: 22px; }
+.dp-section:last-of-type { margin-bottom: 10px; }
+.dp-section-title {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 12px; font-size: 13px; font-weight: 800; color: #e6e9ed;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding-bottom: 8px; border-bottom: 1px solid #1c2530;
+}
+.dp-section-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 999px; flex: none;
+  background: linear-gradient(135deg, #f59e0b, #fbbf24);
+  color: #0b0f14; font-size: 12px; font-weight: 800; letter-spacing: 0;
+}
+.dp-section-hint { font-size: 11px; font-weight: 500; color: #5b6b7c; text-transform: none; letter-spacing: 0; }
+
+/* Section 1 grid: two label/value columns on desktop, one on a phone. */
+.dp-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 12px; }
+
+/* Section 1 read-only list (full sheet) */
+.dp-detail-list { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 10px 16px; margin: 0; }
+.dp-detail-item { border-bottom: 1px solid #161d26; padding-bottom: 6px; min-width: 0; }
+.dp-detail-item dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #5b6b7c; margin-bottom: 3px; }
+.dp-detail-item dd { margin: 0; font-size: 13px; color: #e6e9ed; word-break: break-word; }
+
+/* ---- Hourly grid ---- */
+.dp-hourly-wrap { overflow-x: auto; border: 1px solid #1c2530; border-radius: 10px; }
+.dp-hourly-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 720px; }
+.dp-hourly-table th {
+  background: #0b0f14; color: #5b6b7c; font-size: 10px; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid #1c2530;
+  white-space: nowrap; text-align: left; position: sticky; top: 0;
+}
+.dp-hourly-table td { padding: 5px 8px; border-bottom: 1px solid #161d26; color: #c7ceD6; vertical-align: middle; }
+.dp-hourly-table tbody tr:hover { background: rgba(56, 189, 248, 0.04); }
+.dp-slot { white-space: nowrap; font-family: 'JetBrains Mono', monospace; color: #9aa5b1; }
+.dp-computed { font-family: 'JetBrains Mono', monospace; color: #e6e9ed; text-align: right; white-space: nowrap; }
+.dp-hour-input, .dp-remark-input {
+  background: #0b0f14; border: 1px solid #263140; border-radius: 6px;
+  padding: 5px 7px; color: #e6e9ed; font-size: 12px; font-family: inherit; width: 100%;
+}
+.dp-hour-input { width: 74px; text-align: right; }
+.dp-hour-input:disabled, .dp-remark-input:disabled { opacity: 0.75; border-color: #1c2530; background: #0e131a; }
+.dp-hourly-total td {
+  background: #0e131a; font-weight: 800; color: #e6e9ed;
+  font-family: 'JetBrains Mono', monospace; border-top: 1px solid #263140;
+}
+
+/* ---- End-of-day summary ---- */
+.dp-summary-table { width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #1c2530; border-radius: 10px; overflow: hidden; }
+.dp-summary-table th {
+  text-align: left; background: #0e131a; color: #9aa5b1; font-weight: 600;
+  padding: 9px 12px; border-bottom: 1px solid #161d26; width: 55%;
+}
+.dp-summary-table td {
+  padding: 9px 12px; border-bottom: 1px solid #161d26; color: #e6e9ed;
+  font-family: 'JetBrains Mono', monospace; font-weight: 700;
+}
+.dp-summary-table tr:last-child th, .dp-summary-table tr:last-child td { border-bottom: none; }
+
+/* ---- Full sheet heading ---- */
+.dp-sheet-head { margin-bottom: 16px; }
+.dp-sheet-head h3 { margin: 0 0 4px; font-size: 16px; color: #e6e9ed; }
+.dp-sheet-sub { margin: 0; font-size: 12px; color: #5b6b7c; }
+
+/* ---- Responsive ---- */
+@media (max-width: 900px) {
+  .dp-detail-grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+  .dp-detail-list { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
+  .dp-modal { max-width: 100%; }
+}
+@media (max-width: 640px) {
+  .dp-modal-backdrop { padding: 10px; }
+  .dp-modal-body { padding: 14px; }
+  .dp-detail-grid { grid-template-columns: 1fr; }
+  .dp-detail-list { grid-template-columns: 1fr; }
+  .dp-hour-input { width: 64px; }
+}
+
+/* ============================================================
+   NESTED SIDEBAR ITEMS
+   A parent menu entry that carries `children` renders as a
+   disclosure control with its children indented beneath it.
+   Generic: any category may nest, nothing here is specific to
+   one department.
+   ============================================================ */
+.sidebar-item-parent { justify-content: space-between; }
+.sidebar-item-parent .chev { font-size: 10px; opacity: 0.7; }
+.sidebar-subitems {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0 4px 0;
+  padding-left: 10px;
+  border-left: 1px solid #263140;
+}
+/* Indented one step and slightly smaller, so the hierarchy reads at a glance
+   without needing a second colour or an icon change. */
+.sidebar-subitem {
+  padding-left: 12px;
+  font-size: 13px;
+}
+.sidebar-subitem::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: #3b4c60;
+  flex: none;
+}
+.sidebar-subitem.active::before { background: currentColor; }
+
+/* ============================================================
+   DAILY PRODUCTION ENTRY — the form as a full page.
+   Reuses the dp-* sheet styles; only the page chrome is new.
+   ============================================================ */
+.dp-entry-page { padding-bottom: 40px; }
+/* The page gives the form its own panel, because unlike the modal it sits on a
+   long scrolling page and needs a visual boundary. */
+.dp-entry-card {
+  background: #11161d;
+  border: 1px solid #1c2530;
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+.dp-entry-card .dp-form { margin: 0; }
+.dp-hourly-anchor { scroll-margin-top: 90px; }
+
+/* The hour row a deep link pointed at, so it is obvious which slot was meant. */
+.dp-hour-row-focused { background: rgba(56, 189, 248, 0.08); }
+.dp-hour-row-focused .dp-slot { color: #7dd3fc; }
+
+/* Headline metrics under the form — the figures a manager asks for first. */
+.dp-entry-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.dp-metric {
+  background: #11161d; border: 1px solid #1c2530; border-radius: 10px;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 5px;
+}
+.dp-metric-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #5b6b7c; font-weight: 700; }
+.dp-metric-value { font-size: 21px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: #e6e9ed; }
+
+/* Inline notice on the entry page (matches the erp-notice look). */
+.dp-notice { margin-bottom: 14px; }
+
+/* Saved-entries list under the form. */
+.dp-recent { margin-top: 6px; }
+.dp-recent-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.dp-recent-title {
+  margin: 0; font-size: 13px; font-weight: 800; color: #e6e9ed;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.dp-recent-actions { display: flex; gap: 8px; }
+/* The row currently loaded into the form above, so the link between the two is
+   visible rather than implied. */
+.dp-row-editing { background: rgba(245, 158, 11, 0.07); }
+.dp-row-editing td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
+
+@media (max-width: 640px) {
+  .dp-entry-card { padding: 14px; }
+  .dp-metric-value { font-size: 18px; }
+}
+
+/* ============================================================
+   TNA CALENDAR — the month grid for TNA Management.
+   Dark-themed to match the rest of the shell. Monday-first, with
+   critical-path milestones flagged on the day they fall.
+   ============================================================ */
+.tna-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.tna-dow {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; color: #5b6b7c; padding: 0 4px 6px;
+}
+.tna-cell {
+  min-height: 92px; text-align: left; font: inherit; cursor: pointer;
+  background: #11161d; border: 1px solid #1c2530; border-radius: 9px;
+  padding: 7px 8px; display: flex; flex-direction: column; gap: 4px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.tna-cell:hover { border-color: #38bdf8; }
+.tna-cell-blank { background: transparent; border-color: transparent; cursor: default; }
+.tna-cell-today { border-color: #f59e0b; }
+.tna-cell-selected { background: rgba(56, 189, 248, 0.08); border-color: #38bdf8; }
+.tna-daynum { font-size: 12px; font-weight: 700; color: #9aa5b1; font-family: 'JetBrains Mono', monospace; }
+.tna-cell-today .tna-daynum { color: #f59e0b; }
+/* A milestone chip. The label truncates rather than wrapping, so a busy day
+   stays the same height as an empty one and the grid never jumps. */
+.tna-chip {
+  font-size: 10px; padding: 2px 6px; border-radius: 5px;
+  background: rgba(56, 189, 248, 0.12); color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tna-chip-critical {
+  background: rgba(248, 113, 113, 0.14); color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.4);
+}
+.tna-more { font-size: 10px; color: #5b6b7c; padding-left: 2px; }
+
+@media (max-width: 900px) {
+  .tna-cell { min-height: 74px; padding: 5px 6px; }
+  .tna-chip { font-size: 9px; padding: 1px 4px; }
+}
+@media (max-width: 640px) {
+  .tna-dow { font-size: 9px; }
+  .tna-cell { min-height: 58px; }
+  .tna-daynum { font-size: 11px; }
+  /* Only the colour and the count survive at phone width; the label is
+     unreadable anyway and the day can be tapped for the full list. */
+  .tna-chip { display: none; }
+  .tna-cell:has(.tna-chip)::after {
+    content: '•'; color: #7dd3fc; font-size: 16px; line-height: 1;
+  }
+}
+
+/* ============================================================
+   SEARCHABLE SELECT — the filterable dropdown used by
+   Order Management → Daily Production (style picker and the
+   per-style operation picker).
+   Dark-themed to match the form fields it replaces, and sized
+   to the same height so a form's layout does not shift.
+   ============================================================ */
+.ss-wrap { position: relative; width: 100%; }
+.ss-control {
+  width: 100%; min-height: 36px; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; text-align: left; font: inherit; font-size: 13px; cursor: pointer;
+  background: #0b0f14; border: 1px solid #263140; border-radius: 6px;
+  padding: 8px 10px; color: #e6e9ed;
+}
+.ss-control:hover { border-color: #38bdf8; }
+.ss-control:focus-visible, .ss-input:focus { outline: 2px solid #38bdf8; outline-offset: 1px; }
+.ss-disabled, .ss-control:disabled { opacity: 0.55; cursor: not-allowed; }
+/* Placeholder reads as a prompt, not as a chosen value. */
+.ss-placeholder .ss-value { color: #5b6b7c; }
+.ss-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-caret { flex: none; color: #5b6b7c; font-size: 11px; }
+
+.ss-list {
+  position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; right: 0;
+  max-height: 280px; overflow-y: auto; margin: 0; padding: 4px; list-style: none;
+  background: #0b0f14; border: 1px solid #263140; border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+}
+.ss-option {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border-radius: 6px; font-size: 13px; color: #e6e9ed; cursor: pointer;
+}
+.ss-highlighted { background: #16202b; }
+.ss-selected { color: #7dd3fc; }
+.ss-option-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-option-hint { flex: none; font-size: 11px; color: #5b6b7c; }
+.ss-empty { padding: 10px; color: #5b6b7c; font-size: 12px; }
+
+/* Off-screen but readable by a screen reader — used for a table header that
+   labels a column of icon buttons. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* The generated Employee ID in the directory table — bold and monospaced so the
+   sequence is easy to scan and read aloud to somebody on the floor. */
+.dp-strong { font-weight: 700; color: #e6e9ed; }
+
+/* ============================================================
+   CONFIRM DIALOG — the in-app replacement for window.confirm().
+   Used by the employee directory's delete, and available to any
+   screen that needs a destructive-action confirmation.
+   ============================================================ */
+.dp-confirm { max-width: 440px; }
+.dp-confirm-question {
+  margin: 0 0 8px; font-size: 15px; line-height: 1.5; color: #e6e9ed;
+}
+.dp-confirm-question strong { color: #fbbf24; }
+.dp-confirm-meta {
+  margin: 0 0 12px; font-size: 12px; color: #5b6b7c;
+}
+.dp-modal-actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+  padding: 14px 18px; border-top: 1px solid #1c2530;
+}
+/* `btn-danger` already exists in the ERP stylesheet; this keeps the legacy
+   dialog consistent if that sheet is not loaded. */
+.dp-modal-actions .btn-danger {
+  background: #dc2626; color: #fff; border-color: #dc2626;
+}
+.dp-modal-actions .btn-danger:hover:not(:disabled) { background: #ef4444; }
+.dp-modal-actions .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+@media (max-width: 640px) {
+  .dp-modal-actions { padding: 12px 14px; }
+  .dp-modal-actions .btn { flex: 1 1 auto; }
+}
+
+/* ============================================================
+   MULTI-VALUE COLOUR & SIZE — Order Input
+   Colour is a tag field, Size Range is a chip ladder. Both are
+   dark-themed to match the surrounding form fields and both store
+   a plain comma-separated string, so no reader changes.
+   ============================================================ */
+
+/* A colour/size field spans two grid columns: the chips need the room that a
+   single narrow column would not give, which was the original truncation. */
+.form-field-wide { grid-column: span 2; }
+
+/* ---- Colour tag input ---- */
+.ct-wrap { display: flex; flex-direction: column; gap: 6px; }
+.ct-box {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  min-height: 38px; padding: 6px 8px; cursor: text;
+  background: #0b0f14; border: 1px solid #263140; border-radius: 6px;
+}
+.ct-box:focus-within { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.18); }
+.ct-disabled .ct-box { opacity: 0.55; }
+.ct-tag {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  padding: 3px 4px 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  background: rgba(56, 189, 248, 0.14); color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+.ct-tag-remove {
+  background: transparent; border: 0; cursor: pointer; padding: 0 4px;
+  color: inherit; font-size: 15px; line-height: 1; border-radius: 999px;
+}
+.ct-tag-remove:hover { background: rgba(248, 113, 113, 0.25); color: #fca5a5; }
+/* The text input is borderless inside the box, so the whole box reads as one
+   control rather than a field inside a field. */
+.ct-input {
+  flex: 1 1 120px; min-width: 120px;
+  background: transparent; border: 0; outline: none;
+  color: #e6e9ed; font-size: 13px; font-family: inherit; padding: 4px 2px;
+}
+.ct-input::placeholder { color: #5b6b7c; }
+.ct-suggestions { display: flex; flex-wrap: wrap; gap: 5px; }
+.ct-suggestion {
+  background: #11161d; border: 1px dashed #2a3a4d; border-radius: 999px;
+  padding: 3px 9px; font-size: 11px; color: #9aa5b1; cursor: pointer; font-family: inherit;
+}
+.ct-suggestion:hover { border-color: #38bdf8; color: #7dd3fc; border-style: solid; }
+.ct-summary { margin: 0; font-size: 11px; color: #5b6b7c; }
+
+/* ---- Size range ladder ---- */
+.sz-wrap { display: flex; flex-direction: column; gap: 8px; }
+.sz-disabled { opacity: 0.6; }
+.sz-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.sz-chip {
+  min-width: 40px; padding: 6px 10px; border-radius: 7px;
+  background: #0b0f14; border: 1px solid #263140; color: #9aa5b1;
+  font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.sz-chip:hover:not(:disabled) { border-color: #38bdf8; color: #e6e9ed; }
+/* Selected reads solid, so a glance down the ladder shows the range at once. */
+.sz-chip-on {
+  background: linear-gradient(135deg, #f59e0b, #fbbf24);
+  border-color: #f59e0b; color: #0b0f14;
+}
+.sz-chip:disabled { cursor: not-allowed; }
+.sz-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sz-custom { display: inline-flex; align-items: center; gap: 6px; }
+.sz-custom-input {
+  width: 110px; background: #0b0f14; border: 1px solid #263140; border-radius: 6px;
+  padding: 6px 8px; color: #e6e9ed; font-size: 12px; font-family: inherit;
+}
+.sz-custom-input:focus { outline: 2px solid #38bdf8; outline-offset: 1px; }
+.sz-summary { margin: 0; font-size: 11px; color: #5b6b7c; }
+
+/* ---- Display chips, in the tables and the read-only sheet ---- */
+.mv-cell { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.mv-inline { display: inline-flex; }
+.mv-chip {
+  display: inline-block; padding: 2px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  background: rgba(56, 189, 248, 0.12); color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+.mv-chip-size {
+  background: rgba(245, 158, 11, 0.12); color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.34);
+}
+
+@media (max-width: 900px) {
+  /* A two-column-wide field would overflow a single-column phone grid. */
+  .form-field-wide { grid-column: span 1; }
+}
+
+/* ============================================================
+   MULTI-SELECT DROPDOWN — the checkbox dropdown used by the
+   Colour and Size Range fields on Order Input.
+   Dark-themed to match the surrounding fields. The closed box
+   shows the chosen values as chips, a counter badge beside it
+   shows how many, and the menu offers every option as a
+   checkbox plus a row to add a value the list does not carry.
+   ============================================================ */
+.msd-wrap { position: relative; display: flex; align-items: flex-start; gap: 8px; width: 100%; }
+.msd-disabled { opacity: 0.6; }
+
+/* The closed control (a button) plus the counter badge sit side by side. */
+.msd-control {
+  flex: 1 1 auto; min-width: 0; min-height: 38px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  text-align: left; font: inherit; font-size: 13px; cursor: pointer;
+  background: #0b0f14; border: 1px solid #263140; border-radius: 6px;
+  padding: 6px 10px; color: #e6e9ed;
+}
+.msd-control:hover { border-color: #38bdf8; }
+.msd-control:focus-visible { outline: 2px solid #38bdf8; outline-offset: 1px; }
+.msd-control:disabled { cursor: not-allowed; }
+.msd-values { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.msd-placeholder { color: #5b6b7c; }
+.msd-caret { flex: none; color: #5b6b7c; font-size: 11px; }
+
+/* Selected values as removable chips inside the closed box. */
+.msd-chip {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  padding: 2px 4px 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  background: rgba(56, 189, 248, 0.14); color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+.msd-chip-remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 999px; cursor: pointer;
+  font-size: 14px; line-height: 1; color: inherit;
+}
+.msd-chip-remove:hover { background: rgba(248, 113, 113, 0.25); color: #fca5a5; }
+
+/* The counter box: the exact number of values selected. */
+.msd-counter {
+  flex: none; min-width: 30px; height: 38px; padding: 0 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; font-size: 13px; font-weight: 700;
+  background: #11161d; border: 1px solid #263140; color: #7dd3fc;
+}
+
+/* The dropdown menu. */
+.msd-menu {
+  position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; right: 0;
+  background: #0b0f14; border: 1px solid #263140; border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5); padding: 8px;
+}
+.msd-search, .msd-add-input {
+  width: 100%; background: #11161d; border: 1px solid #263140; border-radius: 6px;
+  padding: 7px 9px; color: #e6e9ed; font-size: 13px; font-family: inherit;
+}
+.msd-search:focus, .msd-add-input:focus { outline: 2px solid #38bdf8; outline-offset: 1px; }
+.msd-list { max-height: 240px; overflow-y: auto; margin: 8px 0 0; padding: 0; list-style: none; }
+.msd-option {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: 6px; font-size: 13px; color: #e6e9ed; cursor: pointer;
+}
+.msd-option:hover { background: #16202b; }
+.msd-checkbox {
+  flex: none; width: 16px; height: 16px; border-radius: 4px; font-size: 11px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid #3a4757; color: #0b0f14;
+}
+.msd-checkbox-on { background: #38bdf8; border-color: #38bdf8; }
+.msd-option-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msd-empty { padding: 9px; color: #5b6b7c; font-size: 12px; }
+.msd-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px solid #1c2530; }
+
+/* Size options read amber, matching the size chips used elsewhere. */
+.msd-tone-size.msd-chip {
+  background: rgba(245, 158, 11, 0.12); color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.34);
+}
+.msd-option.msd-tone-size .msd-checkbox-on { background: #f59e0b; border-color: #f59e0b; }
+
+/* ============================================================
+   DELETE CONFIRMATION — the outcome preview and the archive tick.
+   The checkbox is the difference between "take them off the lists"
+   (reversible) and "remove from the whole site", so the two are
+   shown as visibly different states rather than a silent toggle.
+   ============================================================ */
+.dp-confirm-outcome {
+  margin: 0 0 14px; padding: 10px 12px; border-radius: 9px;
+  font-size: 12px; line-height: 1.55;
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #fcd34d;
+}
+/* The destructive option reads in red, so the stronger choice is unmistakable. */
+.dp-confirm-outcome-strong {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fca5a5;
+}
+.dp-confirm-outcome strong { font-weight: 800; }
+
+.dp-confirm-check {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 11px 12px; margin-bottom: 12px; cursor: pointer;
+  background: #0b0f14; border: 1px solid #263140; border-radius: 9px;
+  font-size: 12.5px; line-height: 1.5; color: #c7ceD6;
+}
+.dp-confirm-check:hover { border-color: #38bdf8; }
+.dp-confirm-check input {
+  flex: none; width: 16px; height: 16px; margin-top: 1px;
+  accent-color: #f87171; cursor: pointer;
+}
+.dp-confirm-check input:disabled { cursor: not-allowed; }
+
+/* A status chip in the directory's status column. */
+.dp-table .erp-chip { margin-right: 4px; }
+
+/* ============================================================
+   CAPACITY & TARGET PANEL — Process Sheet Upload.
+   Turns the sheet's SMV values plus the manpower/hours/efficiency
+   inputs into a line target and a per-operation target.
+   ============================================================ */
+.cap-panel {
+  border: 1px solid #1c2530; border-radius: 10px;
+  background: #0e131a; padding: 16px;
+}
+.cap-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.cap-title { margin: 0; font-size: 13px; font-weight: 800; color: #e6e9ed; letter-spacing: 0.02em; }
+.cap-sub { font-size: 11px; color: #5b6b7c; }
+
+/* The three inputs. Auto-fit so a phone stacks them without a media query. */
+.cap-inputs {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px; margin-bottom: 16px;
+}
+.cap-field { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: #9aa5b1; }
+.cap-field span { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+.cap-field input {
+  background: #0b0f14; border: 1px solid #263140; border-radius: 6px;
+  padding: 9px 10px; color: #e6e9ed; font-size: 14px; font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+}
+.cap-field input:focus { outline: 2px solid #38bdf8; outline-offset: 1px; }
+.cap-field input:disabled { opacity: 0.55; }
+
+/* The headline figures. */
+.cap-line {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; margin-bottom: 14px;
+}
+.cap-figure {
+  background: #11161d; border: 1px solid #1c2530; border-radius: 9px;
+  padding: 11px 13px; display: flex; flex-direction: column; gap: 4px;
+}
+.cap-figure-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #5b6b7c; font-weight: 700; }
+.cap-figure-value { font-size: 22px; font-weight: 800; color: #f59e0b; font-family: 'JetBrains Mono', monospace; }
+.cap-figure-unit { font-size: 11px; color: #5b6b7c; font-weight: 600; }
+.cap-figure-hint { font-size: 10px; color: #5b6b7c; font-family: 'JetBrains Mono', monospace; }
+
+.cap-table-wrap { overflow-x: auto; border: 1px solid #1c2530; border-radius: 9px; }
+.cap-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 620px; }
+.cap-table th {
+  background: #0b0f14; color: #5b6b7c; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 8px 10px; text-align: left; border-bottom: 1px solid #1c2530;
+  white-space: nowrap;
+}
+.cap-table td { padding: 8px 10px; border-bottom: 1px solid #161d26; color: #c7ceD6; }
+.cap-table tbody tr:hover { background: rgba(56, 189, 248, 0.04); }
+.cap-mono { font-family: 'JetBrains Mono', monospace; }
+.cap-strong { color: #fbbf24; font-weight: 700; }
+
+.cap-toggle {
+  margin-top: 10px; background: transparent; border: 1px dashed #2a3a4d; border-radius: 7px;
+  padding: 6px 12px; color: #9aa5b1; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.cap-toggle:hover { border-color: #38bdf8; color: #7dd3fc; border-style: solid; }
+
+.cap-hint { font-size: 12px; color: #5b6b7c; margin: 0 0 12px; }
+.cap-warn { color: #fbbf24; }
+.cap-note { font-size: 11px; color: #5b6b7c; line-height: 1.6; margin: 12px 0 0; }
+.cap-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid #1c2530;
+}
+.cap-saved { font-size: 12px; color: #34d399; font-weight: 600; }
+
+/* ============================================================
+   ACHIEVEMENT PANEL — Daily Production.
+   Surplus/shortfall against the derived target, shown live as the
+   actual output is typed.
+   ============================================================ */
+.ach-panel {
+  margin-top: 14px; border: 1px solid #263140; border-left-width: 4px;
+  border-radius: 9px; background: #0e131a; padding: 12px 14px;
+}
+.ach-good { border-left-color: #34d399; }
+.ach-bad { border-left-color: #f87171; }
+.ach-info { border-left-color: #38bdf8; }
+.ach-row { display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-end; }
+.ach-figure { display: flex; flex-direction: column; gap: 3px; min-width: 96px; }
+.ach-figure-wide { min-width: 150px; }
+.ach-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #5b6b7c; font-weight: 700; }
+.ach-value {
+  font-size: 20px; font-weight: 800; color: #e6e9ed;
+  font-family: 'JetBrains Mono', monospace; line-height: 1.1;
+}
+.ach-good .ach-variance { color: #34d399; }
+.ach-bad .ach-variance { color: #f87171; }
+.ach-sub { font-size: 10px; color: #5b6b7c; font-family: 'JetBrains Mono', monospace; }
+
+@media (max-width: 640px) {
+  .cap-line, .cap-inputs { grid-template-columns: 1fr 1fr; }
+  .cap-figure-value { font-size: 18px; }
+  .ach-row { gap: 16px; }
+  .ach-value { font-size: 17px; }
+}
+/* ============================================================
+   PRODUCTION GROUPING — one employee, many processes.
+   The Daily Production and Worker Production tables group rows by
+   employee/day so the name is stated ONCE (via a rowSpan on the first
+   cell) and each process the worker touched sits underneath it.
+   ============================================================ */
+.pg-table .pg-employee {
+  vertical-align: top; font-weight: 700; color: #e6e9ed;
+  border-right: 1px solid #1c2530;
+}
+.pg-employee-name { display: block; }
+.pg-employee-meta { display: block; font-size: 11px; color: #5b6b7c; font-weight: 500; }
+.pg-employee-count { color: #7dd3fc; }
+/* A hairline between the process rows of one employee keeps the group readable
+   without boxing every row. */
+.pg-row.pg-row-first td { border-top: 1px solid #1c2530; }
+.pg-row:not(.pg-row-first) td:not(.pg-employee) { border-top: 1px dashed #1a222c; }
+.pg-process { font-weight: 600; color: #cbd5e1; }
+.pg-actual { color: #e6e9ed; font-weight: 600; }
+.pg-defect { color: #fbbf24; }
+/* The day total row closes each employee group. */
+.pg-total-row td {
+  background: rgba(56, 189, 248, 0.05);
+  border-top: 1px solid #263140;
+  font-weight: 700; color: #cbd5e1;
+}
+.pg-total-label { text-align: right; color: #5b6b7c; text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; }
+
+/* ---- Compact entry form (the Daily Production Entry modal) ---- */
+.dp-form-compact .dp-section-compact { padding: 0; }
+.dp-compact-figures {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px; margin-top: 14px;
+}
+
+/* ---- Worker Production entry ---- */
+.wp-derived { margin-top: 16px; }
+.wp-live { margin-top: 8px; }
+.wp-form .form-actions { margin-top: 16px; }

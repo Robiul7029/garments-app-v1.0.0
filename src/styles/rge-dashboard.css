@@ -1,0 +1,401 @@
+/* =============================================================
+   ROBIUL GARMENTS ERP — dashboard skin.
+
+   The new dashboard design ships its own visual language: a light card on a
+   soft blue-grey ground, navy headings, pill badges and flat progress bars.
+   That is deliberately different from the dark `erp-` shell the rest of the
+   app uses, so none of it is written against the shared `--erp-*` tokens —
+   redefining those here would repaint every other ERP screen.
+
+   Everything is scoped under `.rge-`, so this file can only ever affect the
+   dashboard that opts in by rendering that root class. It cannot leak.
+
+   The palette is also redeclared locally, which means the dashboard keeps its
+   intended look even when it is rendered inside the dark shell.
+   ============================================================= */
+
+.rge-dash {
+  --rge-nav: #0f2747;
+  --rge-bg: #f4f7fb;
+  --rge-card: #ffffff;
+  --rge-text: #162236;
+  --rge-muted: #6c7a8d;
+  --rge-line: #dfe6ef;
+  --rge-accent: #1f6feb;
+  --rge-good: #16834a;
+  --rge-warn: #b7791f;
+  --rge-bad: #c53030;
+  --rge-radius: 12px;
+
+  background: var(--rge-bg);
+  color: var(--rge-text);
+  border-radius: var(--rge-radius);
+  padding: 22px 24px 40px;
+  margin: -6px;
+}
+
+/* ---- Head ---- */
+.rge-dash-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 16px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.rge-dash-title { margin: 0 0 4px; font-size: 24px; font-weight: 800; color: var(--rge-text); }
+.rge-dash-sub { margin: 0; color: var(--rge-muted); font-size: 13px; }
+.rge-dash-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.rge-btn {
+  border: 0; border-radius: 8px; padding: 10px 14px;
+  cursor: pointer; font-weight: 700; font-size: 13px; font-family: inherit;
+}
+.rge-btn-primary { background: var(--rge-accent); color: #fff; }
+.rge-btn-secondary { background: #eef3f8; color: #223; }
+.rge-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ---- Layout ---- */
+.rge-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.rge-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.rge-section { margin-top: 20px; }
+.rge-cols { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+.rge-cols-even { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+
+.rge-card {
+  background: var(--rge-card); border: 1px solid var(--rge-line);
+  border-radius: var(--rge-radius); padding: 16px;
+  box-shadow: 0 2px 7px rgba(23, 54, 93, 0.04);
+  min-width: 0;
+}
+.rge-card h2, .rge-card-title {
+  font-size: 15px; margin: 0 0 14px; font-weight: 700; color: var(--rge-text);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.rge-card-sub { font-size: 12px; color: var(--rge-muted); font-weight: 500; }
+
+/* ---- KPI card ---- */
+.rge-metric .rge-metric-label {
+  font-size: 12px; color: var(--rge-muted);
+  display: flex; align-items: center; gap: 6px;
+}
+.rge-metric .rge-metric-value { font-size: 26px; font-weight: 800; margin: 7px 0; line-height: 1.1; }
+.rge-metric .rge-metric-sub { font-size: 12px; color: var(--rge-muted); }
+.rge-metric .rge-metric-unit { font-size: 13px; font-weight: 600; color: var(--rge-muted); margin-left: 4px; }
+.rge-metric .rge-trend {
+  display: flex; align-items: flex-end; gap: 2px; height: 20px; margin-top: 10px;
+}
+.rge-trend-bar { flex: 1 1 0; min-width: 2px; border-radius: 2px 2px 0 0; background: #cbd5e1; }
+.rge-trend-bar-last { background: var(--rge-accent); }
+
+.rge-level-good { color: var(--rge-good); }
+.rge-level-warning { color: var(--rge-warn); }
+.rge-level-critical { color: var(--rge-bad); }
+.rge-level-info { color: var(--rge-accent); }
+
+/* ---- Badges ---- */
+.rge-badge {
+  display: inline-block; padding: 4px 9px; border-radius: 20px;
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.rge-badge-good { background: #e6f6ed; color: #16834a; }
+.rge-badge-warning { background: #fff3dc; color: #b7791f; }
+.rge-badge-critical { background: #fde8e8; color: #c53030; }
+.rge-badge-info { background: #e8f1fe; color: #1f6feb; }
+.rge-badge-neutral { background: #eef2f7; color: #55637a; }
+
+/* ---- Progress bar ---- */
+.rge-bar { height: 8px; background: #e9eef5; border-radius: 8px; overflow: hidden; }
+.rge-bar > span { display: block; height: 100%; background: var(--rge-accent); border-radius: 8px; }
+.rge-bar-good > span { background: var(--rge-good); }
+.rge-bar-warning > span { background: var(--rge-warn); }
+.rge-bar-critical > span { background: var(--rge-bad); }
+
+/* ---- Flow rows (the chart beside the production table) ---- */
+.rge-flow-row { margin: 15px 0; }
+.rge-flow-head {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 12px; margin-bottom: 5px;
+}
+.rge-flow-head b { font-variant-numeric: tabular-nums; }
+
+/* ---- Tables ---- */
+.rge-table-wrap { overflow-x: auto; }
+.rge-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rge-table th, .rge-table td {
+  padding: 10px; border-bottom: 1px solid var(--rge-line); text-align: left;
+  white-space: nowrap;
+}
+.rge-table th { color: var(--rge-muted); font-weight: 600; background: #fafcff; }
+.rge-table tbody tr:last-child td { border-bottom: 0; }
+.rge-table .rge-num { text-align: right; font-variant-numeric: tabular-nums; }
+.rge-table tbody tr.rge-placeholder td { color: #a9b4c4; }
+.rge-table tbody tr:hover { background: #f9fbfe; }
+
+/* ---- Charts ---- */
+.rge-chart-plot {
+  position: relative; height: var(--rge-plot-height, 190px);
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 8px 4px 0; border-bottom: 1px solid var(--rge-line);
+}
+.rge-chart-col {
+  flex: 1 1 0; min-width: 0; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 6px;
+}
+.rge-chart-stack {
+  flex: 1 1 auto; display: flex; align-items: flex-end;
+  justify-content: center; gap: 3px; min-height: 0;
+}
+.rge-chart-bar { width: 100%; max-width: 26px; border-radius: 4px 4px 0 0; min-height: 2px; }
+.rge-chart-label {
+  font-size: 10px; color: var(--rge-muted); text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rge-chart-legend {
+  display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;
+}
+.rge-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rge-muted); }
+.rge-legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+/* ---- Ranked bars (stock graph) ---- */
+.rge-ranked { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.rge-ranked-head {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 12px; margin-bottom: 5px;
+}
+.rge-ranked-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rge-ranked-value { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rge-ranked-hint { font-size: 11px; color: var(--rge-muted); margin-top: 4px; }
+
+/* The minimum-stock tick on a ranked bar. Positioned inside the track, and the
+   track is `position: relative` only when a tick needs one — below. */
+.rge-bar { position: relative; }
+.rge-ranked-marker {
+  position: absolute; top: -2px; bottom: -2px; width: 2px;
+  background: var(--rge-warn); border-radius: 1px;
+}
+
+/* ---- Donut ---- */
+.rge-donut-wrap { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.rge-donut {
+  width: 150px; height: 150px; border-radius: 50%; flex: 0 0 auto;
+  display: grid; place-items: center;
+}
+.rge-donut-hole {
+  width: 74%; height: 74%; border-radius: 50%; background: var(--rge-card);
+  display: grid; place-items: center; text-align: center;
+}
+.rge-donut-value { font-size: 20px; font-weight: 800; line-height: 1; }
+.rge-donut-label { font-size: 10px; color: var(--rge-muted); margin-top: 3px; }
+.rge-donut-legend { list-style: none; margin: 0; padding: 0; flex: 1 1 140px; min-width: 0; }
+.rge-donut-legend li {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; padding: 3px 0;
+}
+.rge-donut-legend-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rge-donut-legend-value { font-weight: 700; font-variant-numeric: tabular-nums; }
+.rge-donut-legend-pct { color: var(--rge-muted); min-width: 34px; text-align: right; }
+
+/* ---- Misc ---- */
+.rge-empty { padding: 26px; text-align: center; color: var(--rge-muted); font-size: 13px; }
+.rge-filter-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.rge-select {
+  padding: 9px 11px; border: 1px solid var(--rge-line); border-radius: 8px;
+  background: #fff; font-family: inherit; font-size: 13px; color: var(--rge-text);
+}
+.rge-segmented {
+  display: inline-flex; background: #eef2f7; border-radius: 9px; padding: 3px; gap: 2px; flex-wrap: wrap;
+}
+.rge-segment {
+  border: 0; background: transparent; padding: 8px 14px; border-radius: 7px;
+  font-size: 13px; font-weight: 600; cursor: pointer; color: var(--rge-muted); font-family: inherit;
+}
+.rge-segment.active { background: #fff; color: var(--rge-text); box-shadow: 0 1px 3px rgba(23, 54, 93, 0.12); }
+.rge-note { padding: 10px 14px; border-radius: 9px; font-size: 13px; margin-bottom: 14px; }
+.rge-note-success { background: #e6f6ed; color: #16834a; }
+.rge-note-error { background: #fde8e8; color: #c53030; }
+
+/* =============================================================
+   Responsive — three breakpoints, matching the ones the design and
+   the rest of the app already switch at.
+   ============================================================= */
+
+@media (max-width: 1200px) {
+  .rge-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .rge-dash { padding: 18px 16px 34px; }
+  .rge-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rge-grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rge-cols, .rge-cols-even { grid-template-columns: 1fr; }
+  .rge-dash-title { font-size: 20px; }
+}
+
+@media (max-width: 650px) {
+  .rge-dash { padding: 14px 12px 30px; margin: 0; }
+  .rge-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .rge-grid-3 { grid-template-columns: 1fr; }
+  .rge-card { padding: 13px; }
+  .rge-metric .rge-metric-value { font-size: 21px; }
+  .rge-dash-actions { width: 100%; }
+  .rge-btn { flex: 1 1 auto; }
+  .rge-chart-label { display: none; }
+  .rge-donut { width: 118px; height: 118px; }
+}
+
+/* =============================================================
+   Gauge — the Production Efficiency dial.
+   ============================================================= */
+
+.rge-gauge { position: relative; display: grid; place-items: center; margin: 0 auto; }
+.rge-gauge-arc {
+  position: absolute; inset: 0; border-radius: 50%;
+  /* The conic gradient paints a full disc; the mask cuts it to the 240° arc so
+     only the dial shows and the rest of the circle is transparent. */
+  -webkit-mask: radial-gradient(circle, transparent 58%, #000 59%);
+  mask: radial-gradient(circle, transparent 58%, #000 59%);
+}
+.rge-gauge-hole {
+  position: relative; display: grid; place-items: center; padding-top: 14%;
+}
+.rge-gauge-value { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* =============================================================
+   Horizontal stacked bars — Production Status.
+   ============================================================= */
+
+.rge-stack-body { display: flex; gap: 10px; align-items: stretch; }
+.rge-stack-axis {
+  display: flex; flex-direction: column; justify-content: space-around;
+  flex: 0 0 auto; min-width: 62px;
+}
+.rge-stack-axis-label {
+  font-size: 12px; color: var(--rge-text); white-space: nowrap;
+  height: 22px; line-height: 22px;
+}
+.rge-stack-plot { flex: 1 1 auto; min-width: 0; position: relative; padding-bottom: 22px; }
+.rge-stack-row {
+  display: flex; height: 22px; margin: 0 0 8px;
+  border-radius: 4px; overflow: hidden; background: #eef2f7;
+}
+.rge-stack-seg { height: 100%; transition: width 0.3s ease; }
+.rge-stack-ticks {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; justify-content: space-between;
+}
+.rge-stack-tick {
+  font-size: 10px; color: var(--rge-muted); font-variant-numeric: tabular-nums;
+}
+/* Gridlines behind the rows, so a bar length can be read off the axis. */
+.rge-stack-plot::before {
+  content: ''; position: absolute; inset: 0 0 22px 0;
+  background-image: linear-gradient(to right, var(--rge-line) 1px, transparent 1px);
+  background-size: 25% 100%; opacity: 0.45; pointer-events: none;
+}
+
+/* =============================================================
+   Grouped vertical bars — Inventory Overview.
+   ============================================================= */
+
+.rge-grouped-plot {
+  position: relative; height: var(--rge-grouped-height, 220px);
+  display: flex; align-items: flex-end; gap: 14px;
+  padding: 26px 4px 0; border-bottom: 1px solid var(--rge-line);
+}
+.rge-grouped-col {
+  flex: 1 1 0; min-width: 0; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 6px;
+}
+.rge-grouped-bars {
+  flex: 1 1 auto; display: flex; align-items: flex-end;
+  justify-content: center; gap: 4px; min-height: 0;
+}
+.rge-grouped-bar {
+  width: 100%; max-width: 22px; border-radius: 3px 3px 0 0;
+  position: relative; min-height: 2px;
+}
+.rge-grouped-cap {
+  position: absolute; top: -17px; left: 50%; transform: translateX(-50%);
+  font-size: 10px; color: var(--rge-muted); font-variant-numeric: tabular-nums;
+}
+.rge-tip {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  background: var(--rge-nav); color: #fff; border-radius: 7px;
+  padding: 6px 10px; font-size: 11px; line-height: 1.5;
+  display: flex; flex-direction: column; white-space: nowrap;
+  pointer-events: none; z-index: 2;
+}
+
+@media (max-width: 650px) {
+  .rge-stack-axis { min-width: 48px; }
+  .rge-stack-axis-label { font-size: 11px; }
+  .rge-grouped-plot { gap: 8px; padding: 24px 2px 0; }
+  .rge-grouped-cap { font-size: 9px; }
+}
+
+/* =============================================================
+   KPI row — the three wide panels at the top of the dashboard.
+   ============================================================= */
+
+.rge-section-title {
+  font-size: 17px; font-weight: 800; color: var(--rge-text);
+  margin: 0 0 12px; padding-left: 2px;
+}
+
+.rge-kpi-row {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;
+}
+.rge-kpi-panel {
+  display: flex; flex-direction: column; justify-content: center;
+  min-height: 132px; padding: 18px 20px;
+}
+.rge-kpi-label { font-size: 13px; font-weight: 600; color: var(--rge-text); margin-bottom: 8px; }
+.rge-kpi-value {
+  font-size: 30px; font-weight: 800; color: var(--rge-text);
+  line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+
+/* The trend note under a KPI figure. */
+.rge-trend-note {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px;
+}
+.rge-trend-note-label { color: var(--rge-muted); }
+.rge-trend-note-value { font-weight: 700; font-variant-numeric: tabular-nums; }
+.rge-trend-note-value.is-up { color: var(--rge-good); }
+.rge-trend-note-value.is-down { color: var(--rge-bad); }
+
+/* =============================================================
+   Status pills in the order table.
+   ============================================================= */
+
+.rge-status-pill {
+  display: inline-block; padding: 4px 11px; border-radius: 20px;
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.rge-status-pending { background: #fde8e8; color: #c53030; }
+.rge-status-active { background: #e8f1fe; color: #1f6feb; }
+.rge-status-done { background: #e6f6ed; color: #16834a; }
+.rge-status-late { background: #fde8e8; color: #c53030; }
+
+/* A link that sits under a panel's content rather than inside it. */
+.rge-panel-link {
+  display: inline-block; margin-top: 12px;
+  font-size: 12px; color: var(--rge-accent); text-decoration: none; font-weight: 600;
+}
+.rge-panel-link:hover { text-decoration: underline; }
+
+.rge-mono { font-variant-numeric: tabular-nums; }
+
+/* =============================================================
+   Responsive for the KPI row and the three-up row.
+   ============================================================= */
+
+@media (max-width: 900px) {
+  .rge-kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rge-grid-3 { grid-template-columns: 1fr; }
+  .rge-kpi-value { font-size: 26px; }
+}
+
+@media (max-width: 650px) {
+  .rge-kpi-row { grid-template-columns: 1fr; }
+  .rge-kpi-panel { min-height: 108px; padding: 14px 16px; }
+  .rge-kpi-value { font-size: 24px; }
+  .rge-section-title { font-size: 15px; }
+}

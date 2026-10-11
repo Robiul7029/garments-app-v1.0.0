@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { PROCESS_MAP, COLOR_LIST } from '../config/menuConfig';
+import { SHIFT_OPTIONS, FLOOR_OPTIONS } from '../config/dailyProductionForm';
 
 export default function FieldInput({ field, value, formValues, onChange }) {
   const { getData } = useData();
@@ -110,6 +111,77 @@ export default function FieldInput({ field, value, formValues, onChange }) {
         <select required value={value || ''} onChange={(e) => onChange(e.target.value)}>
           <option value="" disabled>Select process…</option>
           {all.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+      </label>
+    );
+  }
+
+  // Buyer is free text historically, so the list is built from the orders that
+  // already exist and falls back to the same plain input when none do.
+  if (field.type === 'buyer-select') {
+    const buyers = [...new Set(getData('order-model').map((o) => o.buyer).filter(Boolean))];
+    if (buyers.length === 0) {
+      return (
+        <label className="form-field">
+          {label}
+          <input value={value || ''} onChange={(e) => onChange(e.target.value)} placeholder="Buyer name" />
+        </label>
+      );
+    }
+    return (
+      <label className="form-field">
+        {label}
+        <select value={value || ''} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Select buyer…</option>
+          {buyers.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+      </label>
+    );
+  }
+
+  // Order numbers are used verbatim when the master data has none, so the field
+  // never becomes unusable on a fresh install.
+  if (field.type === 'order-select') {
+    const orders = getData('order-model');
+    const numbers = [...new Set(orders.map((o) => o.order_no || o.orderNo).filter(Boolean))];
+    if (numbers.length === 0) {
+      return (
+        <label className="form-field">
+          {label}
+          <input value={value || ''} onChange={(e) => onChange(e.target.value)} placeholder="PO / Order no" />
+        </label>
+      );
+    }
+    return (
+      <label className="form-field">
+        {label}
+        <select value={value || ''} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Select order…</option>
+          {numbers.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </label>
+    );
+  }
+
+  if (field.type === 'shift-select') {
+    return (
+      <label className="form-field">
+        {label}
+        <select value={value || ''} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Select shift…</option>
+          {SHIFT_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </label>
+    );
+  }
+
+  if (field.type === 'floor-select') {
+    return (
+      <label className="form-field">
+        {label}
+        <select value={value || ''} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Select floor…</option>
+          {FLOOR_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
         </select>
       </label>
     );
