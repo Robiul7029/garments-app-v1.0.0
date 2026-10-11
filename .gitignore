@@ -67,3 +67,11 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Ad-hoc QA / scratch harnesses and temp files.
+# These are throwaway browser probes and preview scratch pages, never part of the
+# app: qa-*.mjs drivers, qa-*.html preview pages and any scripts/qa-* helpers.
+qa-*
+scripts/qa-*
+*.tmp
+.git-commit-msg.tmp
