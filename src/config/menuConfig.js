@@ -62,10 +62,20 @@ export const menu = [
         key: 'daily-production',
         label: 'Daily Production',
         icon: '📋',
-        variant: 'table',
+        variant: 'daily-production-tabs',
         userCanAdd: false,
         downloadable: true,
         autoTarget: true,
+<<<<<<< Updated upstream:src/config/menuConfig.js
+=======
+        // The screen itself is the dedicated DailyProductionModule (a three-section
+        // Excel-template form + summary table). This field list survives as the
+        // recorded row shape: the first five keys are what every existing screen
+        // (Production Report, Line Status, the Dashboard's Target vs Actual widget)
+        // reads, and the rest are additive. `quantity` is kept, and is mirrored
+        // from the day's good output
+        // on save, so nothing that already reads a daily-production row breaks.
+>>>>>>> Stashed changes:garments-full-app/src/config/menuConfig.js
         fields: [
           { name: 'date', label: 'Date', type: 'date' },
           { name: 'employee', label: 'Employee Name', type: 'employee-select' },
@@ -74,13 +84,6 @@ export const menu = [
           { name: 'process', label: 'Process', type: 'process-select', dependsOn: 'department' },
           { name: 'quantity', label: 'Quantity', type: 'number' },
         ],
-      },
-      {
-        key: 'production-line',
-        label: 'Production Line',
-        icon: '🏗️',
-        variant: 'line-status',
-        downloadable: true,
       },
       {
         key: 'worker-production',
@@ -97,6 +100,7 @@ export const menu = [
         ],
       },
       {
+<<<<<<< Updated upstream:src/config/menuConfig.js
         key: 'hourly-production',
         label: 'Hourly Production',
         icon: '⏱️',
@@ -111,6 +115,8 @@ export const menu = [
         downloadable: false,
       },
       {
+=======
+>>>>>>> Stashed changes:garments-full-app/src/config/menuConfig.js
         key: 'quality-control',
         label: 'Quality Control',
         icon: '🔍',
@@ -126,19 +132,16 @@ export const menu = [
         ],
       },
       {
-        key: 'order-model',
-        label: 'Order / Model',
-        icon: '📦',
-        variant: 'table',
+        key: 'line-production',
+        label: 'Line Production',
+        icon: '🏭',
+        // A day-by-day list of every line's output, with Edit / Delete per row. The
+        // rows come from the monthly `line-output-YYYY-MM` collections; a line no
+        // supervisor submitted a total for is filled in automatically from the day's
+        // employee entries, so the table is never empty while the floor recorded work.
+        variant: 'line-production',
         userCanAdd: false,
         downloadable: true,
-        fields: [
-          { name: 'buyer', label: 'Buyer', type: 'text' },
-          { name: 'style', label: 'Style', type: 'text' },
-          { name: 'qty', label: 'Order Qty', type: 'number' },
-          { name: 'start_date', label: 'Work Start Date', type: 'date' },
-          { name: 'ship_date', label: 'Delivery Date', type: 'date' },
-        ],
       },
       {
         key: 'production-report',
@@ -495,6 +498,185 @@ export const menu = [
     ],
   },
 
+<<<<<<< Updated upstream:src/config/menuConfig.js
+=======
+  // ============================================================
+  // PRODUCTION PLANNING & CONTROL — five sections that appear directly
+  // in the main sidebar, alongside Sewing, Cutting, Attendance and the
+  // rest. They are plain categories in this array, so the existing
+  // Sidebar and the router pick them up with no special casing: a
+  // category here is one expandable group in the drawer and one route
+  // per item in App.jsx.
+  // ============================================================
+  // ============================================================
+  // ORDER MANAGEMENT — ONE sidebar entry, three tabs on the page.
+  //
+  // This used to be a category with three items (Order List, Order Input,
+  // Process Sheet Upload), which the drawer rendered as an accordion: reaching
+  // the order form meant opening the drawer, expanding Order Management and
+  // clicking again. The three were views of one task, not three destinations, so
+  // they are now a tab bar inside the page — see pages/OrderManagementTabs.jsx.
+  //
+  // There is exactly one item here, so the drawer shows a plain button that goes
+  // straight to the tabbed screen. The tab keys are deliberately NOT declared as
+  // menu items: a second list would have to be kept in step by hand, and the
+  // router generates a route per item (see navigableTargets) which would put the
+  // old standalone URLs back.
+  // ============================================================
+  {
+    key: 'orders',
+    label: 'Order Management',
+    icon: '📑',
+    accent: '#f59e0b',
+    items: [
+      {
+        key: 'order-management',
+        label: 'Order Management',
+        icon: '📑',
+        // Renders the tabbed screen: Order List / Order Input / Process Sheet
+        // Upload. See the variant branch in DataModule.jsx.
+        variant: 'order-management-tabs',
+        userCanAdd: false,
+        downloadable: false,
+      },
+    ],
+  },
+
+  {
+    key: 'tna',
+    label: 'TNA Management',
+    icon: '🗓️',
+    accent: '#fb923c',
+    items: [
+      {
+        key: 'tna-calendar',
+        label: 'TNA Calendar',
+        icon: '📅',
+        variant: 'tna-calendar',
+        userCanAdd: true,
+        downloadable: true,
+      },
+      {
+        key: 'tna-tasks',
+        label: 'Action Tasks',
+        icon: '✅',
+        variant: 'table',
+        userCanAdd: true,
+        downloadable: true,
+        fields: [
+          { name: 'stage', label: 'Stage / Milestone', type: 'text' },
+          { name: 'order_no', label: 'Order No', type: 'text' },
+          { name: 'responsible', label: 'Responsible', type: 'text' },
+          { name: 'planned_date', label: 'Planned Date', type: 'date' },
+          { name: 'actual_date', label: 'Actual Date', type: 'date' },
+          { name: 'status', label: 'Status', type: 'select', options: ['Pending', 'In Progress', 'Completed', 'Delayed'] },
+        ],
+      },
+    ],
+  },
+
+  // ============================================================
+  // MANPOWER MANAGEMENT — ONE sidebar entry, two tabs on the page.
+  //
+  // This used to be a category with two items (Line Deployment, Absenteeism),
+  // which the drawer rendered as an accordion: reaching either screen meant
+  // opening the drawer, expanding Manpower Management and clicking again. They are
+  // views of one subject, not two destinations, so they are now a horizontal tab
+  // bar inside the page — see pages/ManpowerManagementTabs.jsx.
+  //
+  // There is exactly one item here, so the drawer shows a plain button that goes
+  // straight to the tabbed screen. The tab keys are deliberately NOT declared as
+  // menu items: the router generates a route per item (see navigableTargets) which
+  // would put the old standalone sub-menu URLs back.
+  // ============================================================
+  {
+    key: 'manpower',
+    label: 'Manpower Management',
+    icon: '🧑‍🏭',
+    accent: '#f472b6',
+    items: [
+      {
+        key: 'manpower-management',
+        label: 'Manpower Management',
+        icon: '🧑‍🏭',
+        // Renders the tabbed screen: Line Deployment / Absenteeism. See the
+        // variant branch in DataModule.jsx.
+        variant: 'manpower-management-tabs',
+        userCanAdd: false,
+        downloadable: false,
+      },
+    ],
+  },
+
+  {
+    // ONE sidebar entry. "Operator Output" and "Efficiency %" used to be two
+    // sub-items here, which made the same screen reachable by two doors and meant
+    // the two halves could never be read side by side. They are now a segmented
+    // switch bar INSIDE the page (see pages/erp/production/OperatorPerformance),
+    // so the drawer lists one clean destination.
+    //
+    // The single item keeps BOTH the old keys' field definitions out of the
+    // picture deliberately: nothing reads them any more, and leaving them would
+    // invite a second screen to be built from them.
+    key: 'operator',
+    label: 'Operator Performance',
+    icon: '👷',
+    accent: '#a855f7',
+    items: [
+      {
+        key: 'operator-performance',
+        label: 'Operator Performance',
+        icon: '👷',
+        // Routed to the ERP OperatorPerformance screen (with its in-page tabs),
+        // not the generic table renderer.
+        variant: 'operator-performance',
+        userCanAdd: false,
+        downloadable: false,
+      },
+    ],
+  },
+
+  {
+    key: 'qc',
+    label: 'Quality Control',
+    icon: '🔍',
+    accent: '#22d3ee',
+    items: [
+      {
+        key: 'qc-check',
+        label: 'QC Check',
+        icon: '🧪',
+        variant: 'table',
+        userCanAdd: true,
+        downloadable: true,
+        fields: [
+          { name: 'date', label: 'Date', type: 'date' },
+          { name: 'line', label: 'Line', type: 'text' },
+          { name: 'process', label: 'Process Checked', type: 'process-select-all' },
+          { name: 'checked', label: 'Checked Qty', type: 'number' },
+          { name: 'passed', label: 'Passed Qty', type: 'number' },
+          { name: 'defect_qty', label: 'Defect Qty', type: 'number' },
+        ],
+      },
+      {
+        key: 'qc-defects',
+        label: 'Defect Tracking',
+        icon: '🐞',
+        variant: 'quality-control',
+        userCanAdd: true,
+        downloadable: true,
+        fields: [
+          { name: 'date', label: 'Date', type: 'date' },
+          { name: 'line', label: 'Line', type: 'text' },
+          { name: 'process', label: 'Process (where defect found)', type: 'process-select-all' },
+          { name: 'checked', label: 'Checked Qty', type: 'number' },
+          { name: 'defect_qty', label: 'Defect Qty', type: 'number' },
+        ],
+      },
+    ],
+  },
+
+>>>>>>> Stashed changes:garments-full-app/src/config/menuConfig.js
   {
     key: 'leave',
     label: 'Leave',
@@ -560,3 +742,93 @@ export function findModuleItem(catKey, itemKey) {
   if (!item) return null;
   return { category: cat, item };
 }
+<<<<<<< Updated upstream:src/config/menuConfig.js
+=======
+
+// The single place a module URL is spelled out. The sidebar builds its click targets with
+// it and App.jsx builds its routes with it, so the two can never drift apart — a mismatch
+// there meant a sub-button navigated to a path no route matched and the catch-all bounced
+// the visitor back to the Dashboard.
+export function modulePath(catKey, itemKey) {
+  return `/${catKey}/${itemKey}`;
+}
+
+/**
+ * The URL of a nested sub-item, built from the same keys App.jsx generates the
+ * nested route with. Kept beside `modulePath` for the same reason: the sidebar's
+ * click target and the router's path are spelled out in one place, so a nested
+ * button can never navigate to a URL no route matches.
+ */
+export function childModulePath(catKey, parentKey, childKey) {
+  return `/${catKey}/${parentKey}/${childKey}`;
+}
+
+/**
+ * Every navigable target in the menu, flattened, as data.
+ *
+ * The router (App.jsx) and this file are the only two places that need to know
+ * the full path set, so it is derived here once rather than walked inline in the
+ * route table. A nested child is an entry of its own, carrying the parent it sits
+ * under, which is what lets the router pass `parentItem` to the page.
+ *
+ * `isParent` marks a top-level item that also has children: the sidebar renders
+ * it as a disclosure control, but it keeps its own route so an existing bookmark
+ * to the parent path still resolves.
+ */
+export function navigableTargets() {
+  const targets = [];
+  (Array.isArray(menu) ? menu : []).forEach((cat) => {
+    if (!cat?.key || !Array.isArray(cat.items)) return;
+    cat.items.forEach((item) => {
+      if (!item?.key) return;
+      const children = Array.isArray(item.children) ? item.children.filter((c) => c?.key) : [];
+      targets.push({
+        path: modulePath(cat.key, item.key),
+        category: cat,
+        item,
+        parentItem: null,
+        isParent: children.length > 0,
+        depth: 0,
+      });
+      children.forEach((child) => {
+        targets.push({
+          path: childModulePath(cat.key, item.key, child.key),
+          category: cat,
+          item: child,
+          parentItem: item,
+          isParent: false,
+          depth: 1,
+        });
+      });
+    });
+  });
+  // Keep old Sewing Department destinations routable without exposing them as
+  // sidebar entries. The hourly input remains available inside Daily Production.
+  const productionCategory = menu.find((category) => category.key === 'production');
+  const dailyProduction = productionCategory?.items?.find((item) => item.key === 'daily-production');
+  if (productionCategory && dailyProduction) {
+    ['hourly-production', 'production-line', 'order-model'].forEach((key) => {
+      targets.push({
+        path: modulePath('production', key),
+        category: productionCategory,
+        item: { key, label: key === 'hourly-production' ? 'Hourly Production' : key === 'production-line' ? 'Production Line' : 'Order / Model', variant: key === 'hourly-production' ? 'hourly-timesheet' : key === 'production-line' ? 'line-status' : 'table', downloadable: key !== 'production-line', sidebarHidden: true },
+        parentItem: null,
+        isParent: false,
+        depth: 0,
+        sidebarHidden: true,
+      });
+    });
+  }
+  return targets;
+}
+
+/**
+ * The nested children of one menu item, as clickable targets. Returns [] for an
+ * item with no children, so the sidebar can branch on `.length` alone.
+ */
+export function childTargetsOf(catKey, itemKey) {
+  return navigableTargets().filter(
+    (t) => t.depth === 1 && t.category?.key === catKey && t.parentItem?.key === itemKey,
+  );
+}
+>>>>>>> Stashed changes:garments-full-app/src/config/menuConfig.js
