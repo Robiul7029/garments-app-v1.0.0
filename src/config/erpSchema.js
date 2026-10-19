@@ -9,6 +9,17 @@
  * Firestore has no server-side constraints, so uniqueness (no duplicate PO
  * number, no duplicate employee id) is enforced by validationService against a
  * dedicated natural-key index document, written inside a transaction.
+ *
+ * FILE STRUCTURE (categories)
+ * ---------------------------
+ * A collection is also filed under the module that owns it, so the database tree reads
+ * as modules rather than one flat list:
+ *
+ *   appData/{category}/{collection}/{row}     category path — where new rows are written
+ *   appData/{collection}/{row}                legacy flat path — still read while migrating
+ *
+ * `config/dataCategories.js` owns that mapping; `SIGNED_IN_COLLECTIONS` below is the
+ * exception, spelled out here because those paths are built by the repository itself.
  */
 
 // ---- Collections -----------------------------------------------------------
@@ -29,8 +40,15 @@ export const C = {
   PRODUCTION_LINES: 'productionLines',
   LINE_SHIFTS: 'lineShifts',
   HOURLY_PRODUCTION: 'hourlyProduction',
+  DAILY_PRODUCTION: 'dailyProduction',
   CUTTING_PLANS: 'cuttingPlans',
   CUTTING_BATCHES: 'cuttingBatches',
+  // The Cutting Department's own daily entry: one document per lay/table cut.
+  // This is the record the Cutting Report aggregates and the figure the sewing
+  // line's WIP is fed from.
+  CUTTING_ENTRIES: 'cuttingEntries',
+  // Cutting → Sewing feeding: the fabric / bundle quantity a line receives.
+  LINE_INPUTS: 'lineInputs',
 
   // Quality
   DEFECT_CATEGORIES: 'defectCategories',
@@ -80,6 +98,9 @@ export const ORDER_STATUS = {
   READY_TO_SHIP: 'Ready to Ship',
   SHIPPED: 'Shipped',
   COMPLETED: 'Completed',
+  INACTIVE: 'Inactive',
+  CLOSED: 'Closed',
+  ARCHIVED: 'Archived',
   CANCELLED: 'Cancelled',
   DELAYED: 'Delayed',
 };
@@ -141,6 +162,54 @@ export const APPROVAL_STATUS = {
   REJECTED: 'Rejected',
 };
 
+/**
+ * How a line input reached the sewing line. The brief records "fabric or bundle
+ * inputs coming from the Cutting section", so the type distinguishes a loose
+ * fabric issue from a numbered bundle — the two behave differently on the floor
+ * (a bundle has a bundle number, fabric is weighed or measured).
+ */
+export const LINE_INPUT_TYPE = {
+  BUNDLE: 'Bundle',
+  FABRIC: 'Fabric',
+  PANEL: 'Panel',
+  SAMPLE: 'Sample',
+  REJECT_REWORK: 'Reject Rework',
+};
+
+/** The unit fabric consumption is measured in, on the cutting entry form. */
+export const FABRIC_UNIT = {
+  YARDS: 'Yards',
+  METERS: 'Meters',
+};
+
+/**
+ * Where a cutting entry's cut pieces have got to. Drives the report's status
+ * badge and the "Ready Stock for Sewing Feeding" KPI.
+ */
+export const CUTTING_STATUS = {
+  READY: 'Ready',
+  PARTIAL: 'Partially Issued',
+  ISSUED: 'Issued to Sewing',
+};
+
+/**
+ * The stage an input is feeding. Cutting → Sewing is the brief's default, but the
+ * same collection also records a re-feed after rework, which is why the stage is
+ * a field rather than being assumed.
+ */
+export const LINE_INPUT_STAGE = {
+  CUTTING_TO_SEWING: 'Cutting to Sewing',
+  SEWING_TO_FINISHING: 'Sewing to Finishing',
+  REWORK: 'Rework',
+};
+
+/** The shift an input was fed on. Kept beside LINE_SHIFTS' options for consistency. */
+export const INPUT_SHIFT = {
+  MORNING: 'Morning',
+  EVENING: 'Evening',
+  NIGHT: 'Night',
+};
+
 /** Cost heads roll up into these buckets; the list is the costing report order. */
 export const COST_CATEGORIES = [
   'Fabric',
@@ -170,6 +239,10 @@ export const RELATIONS = [
   { from: C.PRODUCTION_LINES, field: 'lineId', to: C.INLINE_QC },
   { from: C.PRODUCTION_LINES, field: 'lineId', to: C.END_LINE_QC },
   { from: C.PRODUCTION_LINES, field: 'lineId', to: C.CUTTING_PLANS },
+  { from: C.PRODUCTION_LINES, field: 'lineId', to: C.LINE_INPUTS },
+  { from: C.STYLES, field: 'styleId', to: C.LINE_INPUTS },
+  { from: C.COLORS, field: 'colorId', to: C.LINE_INPUTS },
+  { from: C.ORDERS, field: 'orderId', to: C.LINE_INPUTS },
   { from: C.STYLES, field: 'styleId', to: C.CUTTING_BATCHES },
   { from: C.COLORS, field: 'colorId', to: C.CUTTING_BATCHES },
   { from: C.PRODUCTION_LINES, field: 'lineId', to: C.MACHINES },
@@ -404,6 +477,98 @@ export const SCHEMA = {
       F('date', 'Date', 'date', { required: true }),
       F('cutQty', 'Cut Qty', 'number', { required: true, min: 0 }),
       F('shortfallReason', 'Shortfall Reason', 'text'),
+    ],
+  },
+
+  // The Cutting Department's dedicated daily entry.
+  //
+  // One document per lay/table cut. The buyer / style / colour / size range / PO
+  // quantity are COPIED onto the row from the selected order rather than only
+  // referenced by id: the cutting book is a floor document that has to print and
+  // export without a join, and an order amended later must not silently rewrite
+  // what was actually cut against it. The order reference is kept alongside so a
+  // report can still group by order.
+  [C.CUTTING_ENTRIES]: {
+    label: 'Cutting Entry',
+    icon: '✂️',
+    fields: [
+      // ---- Order selection (auto-fills the five fields below it) ----
+      F('order_no', 'Order No', 'text', { required: true }),
+      F('buyer', 'Buyer', 'text', { required: true }),
+      F('style', 'Style No', 'text', { required: true }),
+      F('color', 'Color', 'text', { required: true }),
+      F('sizeRange', 'Size Range', 'text', { required: true }),
+      F('poQty', 'PO Qty', 'number', { min: 0 }),
+      // ---- The cutting inputs ----
+      F('date', 'Date', 'date', { required: true }),
+      // "Lay / Table No" — the cutting table a lay was spread on. A factory may run
+      // several lays of the same order, so this is what makes one entry distinct
+      // from the next on the same day.
+      F('layNo', 'Lay / Table No', 'text', { required: true }),
+      F('markerLength', 'Marker Length', 'number', { min: 0 }),
+      F('fabricConsumed', 'Fabric Consumed', 'number', { required: true, min: 0 }),
+      F('fabricUnit', 'Fabric Unit', 'select', {
+        options: Object.values(FABRIC_UNIT),
+        default: FABRIC_UNIT.YARDS,
+      }),
+      F('cutQty', 'Total Cut Quantity', 'number', { required: true, min: 1 }),
+      // How much of the cut quantity has been handed to a sewing line. Written by
+      // the feeding action (or entered here when the issue happens at the table),
+      // and what the report's "Remaining Balance in Cutting Stock" subtracts.
+      F('issuedQty', 'Issued to Sewing Line', 'number', { default: 0, min: 0 }),
+      F('supervisor', 'Cutting Supervisor', 'text'),
+      F('remarks', 'Remarks', 'textarea'),
+      // ---- Relationships (foreign keys) ----
+      F('orderId', 'Order', 'ref:ORDERS'),
+      F('styleId', 'Style Ref', 'ref:STYLES'),
+      F('colorId', 'Color Ref', 'ref:COLORS'),
+      F('syncId', 'Sync Idempotency Key', 'text', { sys: true }),
+    ],
+  },
+
+  [C.LINE_INPUTS]: {
+    label: 'Line Input',
+    icon: '🧺',
+    fields: [
+      // ---- Identity of the input (the brief's required fields) ----
+      // The order number is the thread that ties an input to its order, the same
+      // way a production row is keyed on `order_no` elsewhere in the app. It is
+      // required because an input with no order cannot be balanced against output.
+      F('order_no', 'Order No', 'text', { required: true }),
+      F('style', 'Style', 'text', { required: true }),
+      F('color', 'Color', 'text', { required: true }),
+      F('sizeRange', 'Size Range', 'text', { required: true }),
+      F('inputQty', 'Input Quantity', 'number', { required: true, min: 1 }),
+      F('line_no', 'Line No', 'text', { required: true }),
+      // The moment the input was fed. A supervisor records several inputs in a
+      // shift, so the timestamp (not just the date) is what orders them.
+      F('timestamp', 'Timestamp', 'datetime', { required: true }),
+      // ---- Classification ----
+      F('inputType', 'Input Type', 'select', {
+        options: Object.values(LINE_INPUT_TYPE),
+        default: LINE_INPUT_TYPE.BUNDLE,
+      }),
+      F('stage', 'Stage', 'select', {
+        options: Object.values(LINE_INPUT_STAGE),
+        default: LINE_INPUT_STAGE.CUTTING_TO_SEWING,
+      }),
+      F('shift', 'Shift', 'select', { options: Object.values(INPUT_SHIFT), default: INPUT_SHIFT.MORNING }),
+      // The cut bundle / lot number this input came from, so a bundle can be
+      // traced back to its cutting batch. Optional: loose fabric has no bundle.
+      F('bundleNo', 'Bundle / Lot No', 'text'),
+      F('cuttingBatchId', 'Cutting Batch', 'ref:CUTTING_BATCHES'),
+      // ---- Relationships (foreign keys) ----
+      // Kept alongside the free-text order_no/style/line_no so the screen works
+      // with either the ERP master ids or the floor's own names, exactly as the
+      // production rows do.
+      F('orderId', 'Order', 'ref:ORDERS'),
+      F('poId', 'PO', 'ref:PURCHASE_ORDERS'),
+      F('styleId', 'Style Ref', 'ref:STYLES'),
+      F('colorId', 'Color Ref', 'ref:COLORS'),
+      F('lineId', 'Line Ref', 'ref:PRODUCTION_LINES'),
+      F('receivedBy', 'Received By', 'text'),
+      F('remarks', 'Remarks', 'textarea'),
+      F('syncId', 'Sync Idempotency Key', 'text', { sys: true }),
     ],
   },
 
@@ -743,6 +908,12 @@ export const SCHEMA = {
 export const REQUIRED_INDEXES = [
   { collection: C.HOURLY_PRODUCTION, fields: [['date', 'ASC'], ['lineId', 'ASC']] },
   { collection: C.HOURLY_PRODUCTION, fields: [['date', 'DESC']] },
+  { collection: C.CUTTING_ENTRIES, fields: [['date', 'DESC']] },
+  { collection: C.CUTTING_ENTRIES, fields: [['order_no', 'ASC'], ['date', 'DESC']] },
+  { collection: C.CUTTING_ENTRIES, fields: [['layNo', 'ASC'], ['date', 'DESC']] },
+  { collection: C.LINE_INPUTS, fields: [['timestamp', 'DESC']] },
+  { collection: C.LINE_INPUTS, fields: [['line_no', 'ASC'], ['timestamp', 'DESC']] },
+  { collection: C.LINE_INPUTS, fields: [['order_no', 'ASC'], ['timestamp', 'DESC']] },
   { collection: C.LINE_SHIFTS, fields: [['date', 'ASC'], ['lineId', 'ASC']] },
   { collection: C.INLINE_QC, fields: [['date', 'ASC'], ['lineId', 'ASC']] },
   { collection: C.END_LINE_QC, fields: [['date', 'ASC'], ['lineId', 'ASC']] },

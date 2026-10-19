@@ -115,18 +115,37 @@
 }
 .rge-flow-head b { font-variant-numeric: tabular-nums; }
 
-/* ---- Tables ---- */
+/* ---- Tables ----
+   THE COLOUR IS SET ON THE CELLS, NOT INHERITED.
+   The legacy sheet has element rules (`td { color: #c7ceD6 }`, `th { background:
+   #11161d }`) written for the DARK shell. Those beat any colour inherited from
+   `.rge-dash`, so without the explicit `color` below this table renders pale grey
+   on a white card — readable on the dark screen it was designed for, nearly
+   invisible here. Every rule is scoped to `.rge-table` and comes later in the
+   cascade, so it wins on this screen and touches nothing else. */
 .rge-table-wrap { overflow-x: auto; }
 .rge-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .rge-table th, .rge-table td {
   padding: 10px; border-bottom: 1px solid var(--rge-line); text-align: left;
   white-space: nowrap;
+  /* Dark ink on the light card. Stated on BOTH cells so a themed element rule
+     cannot paint one and not the other. */
+  color: var(--rge-text);
 }
+.rge-table tbody td { background: transparent; }
 .rge-table th { color: var(--rge-muted); font-weight: 600; background: #fafcff; }
+/* The first column names the record, so it reads at full strength. */
+.rge-table tbody td:first-child { font-weight: 600; color: var(--rge-text); }
 .rge-table tbody tr:last-child td { border-bottom: 0; }
 .rge-table .rge-num { text-align: right; font-variant-numeric: tabular-nums; }
-.rge-table tbody tr.rge-placeholder td { color: #a9b4c4; }
+.rge-table tbody tr.rge-placeholder td { color: #a9b4c4; font-weight: 400; }
 .rge-table tbody tr:hover { background: #f9fbfe; }
+
+/* The same guard for the tables the dashboard borrows from the shared sheets.
+   A bare `td`/`th` rule from the legacy stylesheet would otherwise leak in. */
+.rge-card th, .rge-card td { color: var(--rge-text); }
+.rge-card th { color: var(--rge-muted); }
+.rge-card .mono-cell { color: var(--rge-text); }
 
 /* ---- Charts ---- */
 .rge-chart-plot {
@@ -210,6 +229,9 @@
 .rge-note { padding: 10px 14px; border-radius: 9px; font-size: 13px; margin-bottom: 14px; }
 .rge-note-success { background: #e6f6ed; color: #16834a; }
 .rge-note-error { background: #fde8e8; color: #c53030; }
+/* Amber, not red: this is a setup step, not a failure. Nothing is broken — the
+   floor's local rows are saved, they simply have no ERP line to be mirrored onto. */
+.rge-note-warning { background: #fef4dc; color: #92610a; border: 1px solid #f3d79a; }
 
 /* =============================================================
    Responsive — three breakpoints, matching the ones the design and

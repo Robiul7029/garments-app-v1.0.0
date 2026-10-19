@@ -62,15 +62,16 @@ export const menu = [
         key: 'daily-production',
         label: 'Daily Production',
         icon: '📋',
-        variant: 'table',
+        variant: 'daily-production-tabs',
         userCanAdd: false,
         downloadable: true,
         autoTarget: true,
         // The screen itself is the dedicated DailyProductionModule (a three-section
         // Excel-template form + summary table). This field list survives as the
         // recorded row shape: the first five keys are what every existing screen
-        // (Production Report, Line Status, Target vs Actual) reads, and the rest are
-        // additive. `quantity` is kept, and is mirrored from the day's good output
+        // (Production Report, Line Status, the Dashboard's Target vs Actual widget)
+        // reads, and the rest are additive. `quantity` is kept, and is mirrored
+        // from the day's good output
         // on save, so nothing that already reads a daily-production row breaks.
         fields: [
           { name: 'date', label: 'Production Date', type: 'date' },
@@ -95,13 +96,6 @@ export const menu = [
         ],
       },
       {
-        key: 'production-line',
-        label: 'Production Line',
-        icon: '🏗️',
-        variant: 'line-status',
-        downloadable: true,
-      },
-      {
         key: 'worker-production',
         label: 'Worker Production',
         icon: '👥',
@@ -114,38 +108,6 @@ export const menu = [
           { name: 'date', label: 'Date', type: 'date' },
           { name: 'output', label: 'Output Qty', type: 'number' },
         ],
-      },
-      {
-        key: 'hourly-production',
-        label: 'Hourly Production',
-        icon: '⏱️',
-        variant: 'hourly-timesheet',
-        downloadable: true,
-        // A parent with children: the sidebar renders these nested underneath
-        // (and nests them for every other category too — this is not a special
-        // case). The parent itself is NOT clickable as a page when it has
-        // children; it expands. Its own view is still reachable at its route,
-        // so an existing bookmark to /production/hourly-production keeps working.
-        children: [
-          {
-            key: 'daily-production-entry',
-            label: 'Daily Production Entry',
-            icon: '📝',
-            // Rendered as a full page by DailyProductionEntry (see DataModule),
-            // which is the same three-section Hourly Production Tracking form the
-            // Daily Production screen opens in a modal.
-            variant: 'daily-production-entry',
-            userCanAdd: true,
-            downloadable: true,
-          },
-        ],
-      },
-      {
-        key: 'target-vs-actual',
-        label: 'Target vs Actual',
-        icon: '🎯',
-        variant: 'employee-chart',
-        downloadable: false,
       },
       {
         key: 'quality-control',
@@ -163,19 +125,16 @@ export const menu = [
         ],
       },
       {
-        key: 'order-model',
-        label: 'Order / Model',
-        icon: '📦',
-        variant: 'table',
+        key: 'line-production',
+        label: 'Line Production',
+        icon: '🏭',
+        // A day-by-day list of every line's output, with Edit / Delete per row. The
+        // rows come from the monthly `line-output-YYYY-MM` collections; a line no
+        // supervisor submitted a total for is filled in automatically from the day's
+        // employee entries, so the table is never empty while the floor recorded work.
+        variant: 'line-production',
         userCanAdd: false,
         downloadable: true,
-        fields: [
-          { name: 'buyer', label: 'Buyer', type: 'text' },
-          { name: 'style', label: 'Style', type: 'text' },
-          { name: 'qty', label: 'Order Qty', type: 'number' },
-          { name: 'start_date', label: 'Work Start Date', type: 'date' },
-          { name: 'ship_date', label: 'Delivery Date', type: 'date' },
-        ],
       },
       {
         key: 'production-report',
@@ -545,6 +504,21 @@ export const menu = [
   // category here is one expandable group in the drawer and one route
   // per item in App.jsx.
   // ============================================================
+  // ============================================================
+  // ORDER MANAGEMENT — ONE sidebar entry, three tabs on the page.
+  //
+  // This used to be a category with three items (Order List, Order Input,
+  // Process Sheet Upload), which the drawer rendered as an accordion: reaching
+  // the order form meant opening the drawer, expanding Order Management and
+  // clicking again. The three were views of one task, not three destinations, so
+  // they are now a tab bar inside the page — see pages/OrderManagementTabs.jsx.
+  //
+  // There is exactly one item here, so the drawer shows a plain button that goes
+  // straight to the tabbed screen. The tab keys are deliberately NOT declared as
+  // menu items: a second list would have to be kept in step by hand, and the
+  // router generates a route per item (see navigableTargets) which would put the
+  // old standalone URLs back.
+  // ============================================================
   {
     key: 'orders',
     label: 'Order Management',
@@ -552,37 +526,13 @@ export const menu = [
     accent: '#f59e0b',
     items: [
       {
-        key: 'order-list',
-        label: 'Order List',
-        icon: '📋',
-        variant: 'table',
-        userCanAdd: true,
-        downloadable: true,
-        fields: [
-          { name: 'order_no', label: 'Order No', type: 'text' },
-          { name: 'buyer', label: 'Buyer', type: 'text' },
-          { name: 'style', label: 'Style', type: 'text' },
-          { name: 'qty', label: 'Order Qty', type: 'number' },
-          { name: 'order_date', label: 'Order Date', type: 'date' },
-          { name: 'ship_date', label: 'Delivery Date', type: 'date' },
-        ],
-      },
-      {
-        key: 'order-input',
-        label: 'Order Input',
-        icon: '📝',
-        variant: 'order-input',
-        userCanAdd: true,
-        downloadable: false,
-      },
-      {
-        // Sits directly under Order Input, because a process sheet belongs to an
-        // order: the operations it carries are linked back through the style.
-        key: 'process-upload',
-        label: 'Process Sheet Upload',
-        icon: '📤',
-        variant: 'process-upload',
-        userCanAdd: true,
+        key: 'order-management',
+        label: 'Order Management',
+        icon: '📑',
+        // Renders the tabbed screen: Order List / Order Input / Process Sheet
+        // Upload. See the variant branch in DataModule.jsx.
+        variant: 'order-management-tabs',
+        userCanAdd: false,
         downloadable: false,
       },
     ],
@@ -621,6 +571,20 @@ export const menu = [
     ],
   },
 
+  // ============================================================
+  // MANPOWER MANAGEMENT — ONE sidebar entry, two tabs on the page.
+  //
+  // This used to be a category with two items (Line Deployment, Absenteeism),
+  // which the drawer rendered as an accordion: reaching either screen meant
+  // opening the drawer, expanding Manpower Management and clicking again. They are
+  // views of one subject, not two destinations, so they are now a horizontal tab
+  // bar inside the page — see pages/ManpowerManagementTabs.jsx.
+  //
+  // There is exactly one item here, so the drawer shows a plain button that goes
+  // straight to the tabbed screen. The tab keys are deliberately NOT declared as
+  // menu items: the router generates a route per item (see navigableTargets) which
+  // would put the old standalone sub-menu URLs back.
+  // ============================================================
   {
     key: 'manpower',
     label: 'Manpower Management',
@@ -628,71 +592,42 @@ export const menu = [
     accent: '#f472b6',
     items: [
       {
-        // The employee directory. This screen issues the Employee IDs that every
-        // other form in the app selects from, so it is a dedicated page rather
-        // than the generic field-driven table: a name and a generated ID are the
-        // whole record, and the old date/line/shift head-count grid was removed.
-        key: 'manpower-deployment',
-        label: 'Line Deployment',
-        icon: '👥',
-        variant: 'line-deployment',
-        userCanAdd: true,
-        downloadable: true,
-      },
-      {
-        key: 'manpower-absent',
-        label: 'Absenteeism',
-        icon: '🚫',
-        variant: 'table',
+        key: 'manpower-management',
+        label: 'Manpower Management',
+        icon: '🧑‍🏭',
+        // Renders the tabbed screen: Line Deployment / Absenteeism. See the
+        // variant branch in DataModule.jsx.
+        variant: 'manpower-management-tabs',
         userCanAdd: false,
-        downloadable: true,
-        fields: [
-          { name: 'date', label: 'Date', type: 'date' },
-          { name: 'line', label: 'Line', type: 'text' },
-          { name: 'absent', label: 'Absent Count', type: 'number' },
-          { name: 'note', label: 'Note', type: 'text' },
-        ],
+        downloadable: false,
       },
     ],
   },
 
   {
+    // ONE sidebar entry. "Operator Output" and "Efficiency %" used to be two
+    // sub-items here, which made the same screen reachable by two doors and meant
+    // the two halves could never be read side by side. They are now a segmented
+    // switch bar INSIDE the page (see pages/erp/production/OperatorPerformance),
+    // so the drawer lists one clean destination.
+    //
+    // The single item keeps BOTH the old keys' field definitions out of the
+    // picture deliberately: nothing reads them any more, and leaving them would
+    // invite a second screen to be built from them.
     key: 'operator',
     label: 'Operator Performance',
     icon: '👷',
     accent: '#a855f7',
     items: [
       {
-        key: 'operator-output',
-        label: 'Operator Output',
-        icon: '🏭',
-        variant: 'table',
-        userCanAdd: true,
-        downloadable: true,
-        fields: [
-          { name: 'date', label: 'Date', type: 'date' },
-          { name: 'employee', label: 'Operator', type: 'employee-select' },
-          { name: 'line', label: 'Line', type: 'text' },
-          { name: 'process', label: 'Operation', type: 'process-select-all' },
-          { name: 'target', label: 'Target (pcs)', type: 'number' },
-          { name: 'achieved', label: 'Achieved (pcs)', type: 'number' },
-        ],
-      },
-      {
-        key: 'operator-efficiency',
-        label: 'Efficiency %',
-        icon: '📈',
-        variant: 'table',
+        key: 'operator-performance',
+        label: 'Operator Performance',
+        icon: '👷',
+        // Routed to the ERP OperatorPerformance screen (with its in-page tabs),
+        // not the generic table renderer.
+        variant: 'operator-performance',
         userCanAdd: false,
-        downloadable: true,
-        diffCalc: { target: 'target', actual: 'achieved' },
-        fields: [
-          { name: 'date', label: 'Date', type: 'date' },
-          { name: 'employee', label: 'Operator', type: 'employee-select' },
-          { name: 'process', label: 'Operation', type: 'process-select-all' },
-          { name: 'target', label: 'Target', type: 'number' },
-          { name: 'achieved', label: 'Achieved', type: 'number' },
-        ],
+        downloadable: false,
       },
     ],
   },
@@ -860,6 +795,23 @@ export function navigableTargets() {
       });
     });
   });
+  // Keep old Sewing Department destinations routable without exposing them as
+  // sidebar entries. The hourly input remains available inside Daily Production.
+  const productionCategory = menu.find((category) => category.key === 'production');
+  const dailyProduction = productionCategory?.items?.find((item) => item.key === 'daily-production');
+  if (productionCategory && dailyProduction) {
+    ['hourly-production', 'production-line', 'order-model'].forEach((key) => {
+      targets.push({
+        path: modulePath('production', key),
+        category: productionCategory,
+        item: { key, label: key === 'hourly-production' ? 'Hourly Production' : key === 'production-line' ? 'Production Line' : 'Order / Model', variant: key === 'hourly-production' ? 'hourly-timesheet' : key === 'production-line' ? 'line-status' : 'table', downloadable: key !== 'production-line', sidebarHidden: true },
+        parentItem: null,
+        isParent: false,
+        depth: 0,
+        sidebarHidden: true,
+      });
+    });
+  }
   return targets;
 }
 

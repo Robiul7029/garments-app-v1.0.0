@@ -57,6 +57,10 @@ export function processFigures(row = {}) {
 
   return {
     process: String(row.process || row.operation || '').trim() || '—',
+    // Every process the row covers. A multi-process entry is stored as ONE row
+    // carrying `processes`, so listing all of them is what stops a two-process day
+    // being shown as a single "Collar Attach" line with the whole target on it.
+    processes: processesOf(row),
     style: row.style || '',
     target,
     actual,
@@ -67,6 +71,24 @@ export function processFigures(row = {}) {
     isSurplus: variance > 0,
     isShortfall: variance < 0,
   };
+}
+
+/**
+ * The operations a stored row covers, as a list.
+ *
+ * Reads `processes` when present and falls back to the singular `process`, so a
+ * row entered before multi-process support reads exactly as it always did.
+ */
+export function processesOf(row = {}) {
+  const list = Array.isArray(row.processes)
+    ? row.processes
+    : (typeof row.processes === 'string' && row.processes !== ''
+      ? row.processes.split(',')
+      : []);
+  const cleaned = list.map((p) => String(p || '').trim()).filter(Boolean);
+  if (cleaned.length > 0) return cleaned;
+  const single = String(row.process || row.operation || '').trim();
+  return single ? [single] : [];
 }
 
 /**
@@ -116,7 +138,24 @@ export function groupedByEmployee(rows = []) {
       });
     }
     const group = groups.get(key);
-    group.processes.push({ ...processFigures(row), id: row.id, row });
+    const figures = processFigures(row);
+    // A row covering SEVERAL processes is shown as one line per process, each with
+    // its own target, rather than as a single line carrying the whole day's target.
+    // The row's own actual/defect belong to the entry as a whole, so they are
+    // stated on the FIRST line only and left off the rest — repeating them would
+    // multiply the day's output by the number of processes.
+    figures.processes.forEach((name, i) => {
+      group.processes.push({
+        ...figures,
+        process: name,
+        target: num((row.process_targets || {})[name]) || (i === 0 ? figures.target : 0),
+        actual: i === 0 ? figures.actual : 0,
+        good: i === 0 ? figures.good : 0,
+        defect: i === 0 ? figures.defect : 0,
+        id: row.id,
+        row,
+      });
+    });
     // A later row may carry a style/line the first one lacked.
     if (!group.style && row.style) group.style = row.style;
     if (!group.line && (row.line_no || row.line)) group.line = row.line_no || row.line;

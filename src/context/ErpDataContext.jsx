@@ -29,6 +29,7 @@ import { C } from '../config/erpSchema';
 const DASHBOARD_SOURCES = [
   { key: 'productionLines', collection: C.PRODUCTION_LINES, pageSize: 100 },
   { key: 'hourlyProduction', collection: C.HOURLY_PRODUCTION, pageSize: 500 },
+  { key: 'dailyProduction', collection: C.DAILY_PRODUCTION, pageSize: 500 },
   { key: 'lineShifts', collection: C.LINE_SHIFTS, pageSize: 200 },
   { key: 'purchaseOrders', collection: C.PURCHASE_ORDERS, pageSize: 100 },
   { key: 'orders', collection: C.ORDERS, pageSize: 100 },
@@ -81,14 +82,20 @@ export function ErpDataProvider({ children }) {
    * Returns `{ ok, row }` or `{ ok:false, error }` — never throws, so a screen
    * can render the message directly.
    */
-  const save = useCallback(async (collection, values, { id, module } = {}) => {
+  /**
+   * `categorize: true` files the row under its module's category
+   * (`appData/production/cuttingEntries/…`) instead of the shared root. Screens for the
+   * Daily Production area pass it; every other screen keeps the root path it has always
+   * used, so this is opt-in and cannot move a collection by accident.
+   */
+  const save = useCallback(async (collection, values, { id, module, categorize = false } = {}) => {
     const action = id ? ACTION.EDIT : ACTION.CREATE;
     if (!permissions.can(module, action)) {
       return { ok: false, error: 'You do not have permission to do that. Ask an administrator.' };
     }
-    const ctx = { actor: permissions.actorName, actorUid: permissions.uid, module };
+    const ctx = { actor: permissions.actorName, actorUid: permissions.uid, module, categorize };
     try {
-      const before = id ? await getDocument(collection, id) : null;
+      const before = id ? await getDocument(collection, id, { categorize }) : null;
       const row = id
         ? await updateDocument(collection, id, values, ctx)
         : await createDocument(collection, values, ctx);
@@ -101,13 +108,13 @@ export function ErpDataProvider({ children }) {
     }
   }, [permissions]);
 
-  const remove = useCallback(async (collection, id, { module, label } = {}) => {
+  const remove = useCallback(async (collection, id, { module, label, categorize = false } = {}) => {
     if (!permissions.can(module, ACTION.DELETE)) {
       return { ok: false, error: 'You do not have permission to delete records here.' };
     }
-    const ctx = { actor: permissions.actorName, actorUid: permissions.uid, module };
+    const ctx = { actor: permissions.actorName, actorUid: permissions.uid, module, categorize };
     try {
-      const before = await getDocument(collection, id);
+      const before = await getDocument(collection, id, { categorize });
       await deleteDocument(collection, id, ctx);
       await audit.deleted(ctx, collection, before || { id, label });
       return { ok: true };
@@ -138,7 +145,10 @@ export function ErpDataProvider({ children }) {
   return <ErpDataContext.Provider value={value}>{children}</ErpDataContext.Provider>;
 }
 
-const ErpDataContext = createContext(null);
+// Exported so a test can provide a stub data source directly, matching
+// PermissionContext and DataContext. Production reads it only through
+// `useErpData`.
+export const ErpDataContext = createContext(null);
 
 export function useErpData() {
   const ctx = useContext(ErpDataContext);

@@ -7,6 +7,12 @@ import { RoleProvider } from './context/RoleContext';
 import OrderInputPage from './pages/OrderInputPage';
 
 export default function QaOrderInputPreview() {
+  // Dates across the recent-months window, plus one older row that must NOT show.
+  const monthKey = (offset) => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + offset);
+    return d.toISOString().slice(0, 7);
+  };
   const [data, setData] = useState({
     employees: ['Salma Khatun', 'Rina Akter'],
     'order-model': [
@@ -14,10 +20,23 @@ export default function QaOrderInputPreview() {
         id: 1, buyer: 'H&M', order_no: 'PO-105', style: 'STY-1001', item: 'Basic Tee',
         color: 'Navy, Black, White', size_range: 'XS, S, M, L, XL, XXL, 3XL, 4XL',
         qty: 5000, floor: 'Floor-2', line_no: 'Line-03', shift: 'Morning',
-        supervisor: 'Salma Khatun', ship_date: '2026-09-20',
+        supervisor: 'Salma Khatun', order_date: `${monthKey(0)}-05`, ship_date: `${monthKey(0)}-20`,
       },
-      // A legacy single-colour row, to prove it still renders unchanged.
-      { id: 2, buyer: 'Zara', order_no: 'PO-106', style: 'STY-1000', color: 'Navy', size_range: 'S-M-L', qty: 1500 },
+      // A legacy single-colour row, from LAST month.
+      {
+        id: 2, buyer: 'Zara', order_no: 'PO-106', style: 'STY-1000', color: 'Navy',
+        size_range: 'S-M-L', qty: 1500, order_date: `${monthKey(-1)}-12`, ship_date: `${monthKey(-1)}-28`,
+      },
+      // A row from TWO months back, still inside the window.
+      {
+        id: 3, buyer: 'Uniqlo', order_no: 'PO-090', style: 'STY-0900', color: 'Olive',
+        size_range: 'M, L', qty: 800, order_date: `${monthKey(-2)}-08`, ship_date: `${monthKey(-2)}-25`,
+      },
+      // FIVE months back — OUTSIDE the window, must not appear.
+      {
+        id: 4, buyer: 'Zara', order_no: 'PO-050', style: 'STY-OLD', color: 'Red',
+        size_range: 'S', qty: 100, order_date: `${monthKey(-5)}-01`, ship_date: `${monthKey(-5)}-15`,
+      },
     ],
   });
 
@@ -25,8 +44,16 @@ export default function QaOrderInputPreview() {
   const addEntry = useCallback((key, entry) => {
     setData((prev) => ({ ...prev, [key]: [...(prev[key] || []), { id: Date.now(), ...entry }] }));
   }, []);
-  const updateEntry = useCallback(() => { }, []);
-  const deleteEntry = useCallback(() => { }, []);
+  // Real mutations, so Edit and Delete can be driven end-to-end in the browser.
+  const updateEntry = useCallback((key, id, updated) => {
+    setData((prev) => ({
+      ...prev,
+      [key]: (prev[key] || []).map((row) => (row.id === id ? { ...row, ...updated } : row)),
+    }));
+  }, []);
+  const deleteEntry = useCallback((key, id) => {
+    setData((prev) => ({ ...prev, [key]: (prev[key] || []).filter((row) => row.id !== id) }));
+  }, []);
   const setRaw = useCallback(() => { }, []);
 
   const value = useMemo(

@@ -69,10 +69,16 @@ describe('the ERP sidebar navigation', () => {
       .forEach((label) => expect(html).toContain(label));
   });
 
-  it('renders the Order Management group as an expandable parent', () => {
-    // The parent carries the disclosure chevron and aria-expanded.
-    expect(html).toContain('sidebar-item-parent');
-    expect(html).toContain('aria-expanded');
+  it('renders Order Management as a single item, not an expandable parent', () => {
+    // Order Management is now a TABBED module: its three screens live in a tab
+    // bar inside the page, so the drawer lists it as one plain entry with no
+    // disclosure control and no sub-items. This replaced the accordion it used
+    // to render.
+    expect(html).toContain('Order Management');
+    expect(html).not.toContain('sidebar-item-parent');
+    expect(html).not.toContain('sidebar-subitems');
+    expect(html).not.toContain('Order Input');
+    expect(html).not.toContain('Process Breakdown');
   });
 
   it('does not list a module twice', () => {

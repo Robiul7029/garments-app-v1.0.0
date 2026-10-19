@@ -32,11 +32,29 @@ import {
   runTransaction,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { APP_DATA_ROOT } from './appDataStore';
+import { categoryOf } from '../config/dataCategories';
 import { C, editableFields, uniqueFieldsOf } from '../config/erpSchema';
 import { validateRecord, applyDefaults } from './validationService';
 
 export const DEFAULT_PAGE_SIZE = 25;
 export const MAX_PAGE_SIZE = 200;
+
+/**
+ * Where an ERP document is written.
+ *
+ * Default: the collection at the root (`cuttingEntries/abc`).
+ * Categorised: filed under its module (`appData/production/cuttingEntries/abc`), so the
+ * Daily Production area owns its own rows instead of sharing the root with everything
+ * else. `categoryOf` decides the folder from the collection name.
+ *
+ * @param {string} path  'cuttingEntries' or 'cuttingEntries/abc'
+ */
+function resolvePath(path, { categorize = false } = {}) {
+  if (!categorize) return path;
+  const [collectionId, ...rest] = String(path).split('/');
+  return [APP_DATA_ROOT, categoryOf(collectionId), collectionId, ...rest].join('/');
+}
 
 // ---- Core helpers ----------------------------------------------------------
 
@@ -198,10 +216,10 @@ export async function listAll(collection, { where = [], orderBy = [] } = {}) {
 }
 
 /** One document by id, or null. */
-export async function getDocument(collection, id) {
+export async function getDocument(collection, id, opts = {}) {
   if (!id) return null;
   try {
-    const snap = await getDoc(fsDoc(db, collection, id));
+    const snap = await getDoc(fsDoc(db, resolvePath(`${collection}/${id}`, opts)));
     return snap.exists() ? normalise(snap) : null;
   } catch (error) {
     throw ErpError.from(error, 'Could not load that record.');
@@ -215,7 +233,7 @@ export async function getDocument(collection, id) {
  */
 export function subscribeCollection(
   collection,
-  { where = [], orderBy = [], pageSize = DEFAULT_PAGE_SIZE, onChange, onError } = {}
+  { where = [], orderBy = [], pageSize = DEFAULT_PAGE_SIZE, onChange, onError, categorize = false } = {}
 ) {
   const size = Math.min(Math.max(1, Number(pageSize) || DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
   const constraints = [];
@@ -230,7 +248,7 @@ export function subscribeCollection(
   constraints.push(fsLimit(size));
 
   return onSnapshot(
-    fsQuery(fsCollection(db, collection), ...constraints),
+    fsQuery(fsCollection(db, resolvePath(collection, { categorize })), ...constraints),
     (snap) => {
       const rows = snap.docs.map(normalise);
       onChange?.(rows, { count: snap.size, serverTimestamp: snap.queryOptions?.limit || null });
@@ -359,8 +377,11 @@ async function releaseUniqueKeys(collection, docId, values) {
  * @param {object} ctx               { actor, duplicates, availableQty, skipUnique }
  * @returns {Promise<object>} the created document with its generated id
  */
-export async function createDocument(collection, values, ctx = {}) {
+export async function createDocument(collection, values, options = {}) {
   const errors = {};
+  // ctx.categorize files the new document under its module (see resolvePath); every
+  // other key (actor, duplicates, availableQty) is the validation context it always was.
+  const { categorize = false, ...ctx } = options;
   // Uniqueness is checked inside a transaction, so the pre-flight lookup here is
   // only to give an instant, friendly message. ctx.duplicates is optional.
   const check = validateRecord(collection, values, ctx);
@@ -377,7 +398,7 @@ export async function createDocument(collection, values, ctx = {}) {
   payload.createdBy = ctx.actor || 'unknown';
   payload.updatedAt = serverTimestamp();
 
-  const ref = fsDoc(fsCollection(db, collection));
+  const ref = fsDoc(fsCollection(db, resolvePath(collection, { categorize })));
   await claimUniqueKeys(collection, ref.id, payload, null);
   try {
     await setDoc(ref, payload);
@@ -395,8 +416,9 @@ export async function createDocument(collection, values, ctx = {}) {
  * Updates a document. Only the supplied fields are written, so a partial form
  * submission never blanks a field the user did not touch.
  */
-export async function updateDocument(collection, id, values, ctx = {}) {
-  const existing = await getDocument(collection, id);
+export async function updateDocument(collection, id, values, options = {}) {
+  const { categorize = false, ...ctx } = options;
+  const existing = await getDocument(collection, id, { categorize });
   if (!existing) throw new ErpError('That record no longer exists.', { code: 'not-found' });
 
   const merged = { ...existing, ...values };
@@ -414,7 +436,7 @@ export async function updateDocument(collection, id, values, ctx = {}) {
 
   await claimUniqueKeys(collection, id, merged, existing);
   try {
-    await fsUpdateDoc(fsDoc(db, collection, id), payload);
+    await fsUpdateDoc(fsDoc(db, resolvePath(`${collection}/${id}`, { categorize })), payload);
   } catch (error) {
     throw ErpError.from(error, 'Could not save your changes.');
   }
@@ -427,10 +449,11 @@ export async function updateDocument(collection, id, values, ctx = {}) {
  * is gone.
  */
 export async function deleteDocument(collection, id, ctx = {}) {
-  const existing = await getDocument(collection, id);
+  const { categorize = false } = ctx;
+  const existing = await getDocument(collection, id, { categorize });
   if (!existing) throw new ErpError('That record no longer exists.', { code: 'not-found' });
   try {
-    await fsDeleteDoc(fsDoc(db, collection, id));
+    await fsDeleteDoc(fsDoc(db, resolvePath(`${collection}/${id}`, { categorize })));
   } catch (error) {
     throw ErpError.from(error, 'Could not delete this record.');
   }

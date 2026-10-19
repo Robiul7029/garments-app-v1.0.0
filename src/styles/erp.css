@@ -165,6 +165,54 @@
 .erp-segment.active { background: var(--erp-accent); color: #05202e; }
 .erp-segment:focus-visible { outline: 2px solid var(--erp-accent); outline-offset: -2px; }
 
+/* ---- Tab bar (a module's sub-navigation) ----
+   The horizontal switch between the views of one module — Order List, Order
+   Input, Process Sheet Upload. Deliberately the same visual language as
+   `.erp-segment` above: a joined row where the ACTIVE tab takes the primary
+   accent and the rest stay muted, so "which one am I on" is answerable at a
+   glance. The bar scrolls rather than wrapping on a phone, because a wrapped
+   tab bar moves the content down the screen on every reflow. */
+.erp-tabbar {
+  display: flex; align-items: stretch; gap: 0;
+  margin: 0 0 18px;
+  border: 1px solid var(--erp-border); border-radius: 10px;
+  background: var(--erp-panel-2);
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.erp-tab {
+  flex: 1 1 auto; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: transparent; border: 0; border-bottom: 2px solid transparent;
+  padding: 12px 20px; font-size: 13.5px; font-weight: 600;
+  color: var(--erp-muted); cursor: pointer; font-family: inherit;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.erp-tab + .erp-tab { border-left: 1px solid var(--erp-border); }
+.erp-tab:hover:not(.active) { color: var(--erp-text); background: rgba(255, 255, 255, 0.03); }
+/* The active tab is the primary style: accent fill, dark ink for contrast. */
+.erp-tab.active {
+  background: var(--erp-accent); color: #05202e;
+  border-bottom-color: var(--erp-accent);
+}
+.erp-tab:focus-visible { outline: 2px solid var(--erp-accent); outline-offset: -2px; }
+
+/* The panel below the bar. A little top padding so the first element of a tab
+   does not sit flush against the bar's border. */
+.erp-tabpanel { padding-top: 2px; }
+.erp-tabpanel:focus { outline: none; }
+
+/* A legacy screen embedded in a tab keeps its own layout; this only trims the
+   page padding it carried when it was a standalone sidebar destination, so the
+   content lines up with the tab bar above instead of being inset twice. */
+.erp-tab-embed > .module { padding: 0; }
+
+@media (max-width: 640px) {
+  .erp-tab { padding: 11px 14px; font-size: 12.5px; }
+  .erp-tabbar { border-radius: 8px; }
+}
+
 /* ---- States ---- */
 .erp-state { padding: 44px 24px; text-align: center; color: var(--erp-muted); }
 .erp-state-icon { font-size: 40px; margin-bottom: 10px; }
@@ -470,6 +518,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Auto-filled field on the Cutting entry form ---- *//* A value that was pulled from the selected order rather than typed here. The
+   field stays fully editable — the order may state a colour range the lay does
+   not use — so this only marks its provenance, it never disables the control. */
+.ct-field-auto-tag {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  text-transform: uppercase; color: var(--erp-muted);
+  background: var(--erp-surface-2, rgba(148, 163, 184, 0.16));
+}
+.ct-field-auto .erp-input {
+  /* A left rule reads as "this came from elsewhere" without tinting the text,
+     so an auto-filled value is still as legible as a typed one. */
+  border-left: 2px solid var(--erp-accent, #38bdf8);
+}
+
 /* =============================================================
    Responsive. Three breakpoints, mirroring the ones the legacy
    stylesheet already uses, so the dashboard and the rest of the app
@@ -560,3 +623,56 @@
 /* A nested ERP sub-item needs the same indent treatment the legacy
    sidebar gives a nested department item. */
 .sidebar-nest .sidebar-subitems .sidebar-item { font-size: 13px; }
+/* =============================================================
+   ROBIUL GARMENTS ERP — Quality Control analytics dashboard
+   Appended to the design system above. `erp-` namespaced like
+   everything else, with a `qc-` prefix for the screen's own parts.
+   ============================================================= */
+
+/* The summary table carries eleven columns, so it is wider than the default
+   `min-width: 640px` table; the wrapper scrolls rather than squashing a column. */
+.qc-summary-table { min-width: 900px; }
+.qc-num { font-variant-numeric: tabular-nums; }
+
+/* The defect-rate cell: the same band as the row's status badge, so the number
+   and the word beside it can never read as two different verdicts. */
+.qc-rate { font-weight: 700; }
+.qc-rate-success { color: var(--erp-good); }
+.qc-rate-warning { color: var(--erp-warning); }
+.qc-rate-danger { color: var(--erp-critical); }
+
+/* ---- Top defect types — the selected day's analysis ----
+   Three ranked cards. Auto-fit means one or two types still fill the row rather
+   than leaving two-thirds of it empty. */
+.qc-defect-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.qc-defect-card {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: var(--erp-panel-2); border: 1px solid var(--erp-border);
+  border-left-width: 4px; border-left-color: var(--erp-critical);
+  border-radius: 10px; padding: 13px 15px;
+}
+.qc-defect-rank {
+  flex: none; font-size: 15px; font-weight: 800;
+  color: var(--erp-critical); font-variant-numeric: tabular-nums;
+}
+.qc-defect-body { min-width: 0; }
+.qc-defect-name {
+  font-size: 14px; font-weight: 700; color: var(--erp-text);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.qc-defect-figures {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px;
+  font-size: 12px; color: var(--erp-muted);
+}
+.qc-defect-qty { font-weight: 800; color: var(--erp-text); font-variant-numeric: tabular-nums; }
+.qc-defect-qty em { font-style: normal; font-weight: 600; color: var(--erp-muted); }
+.qc-defect-share { color: #fca5a5; font-weight: 600; }
+
+@media (max-width: 650px) {
+  .qc-defect-grid { grid-template-columns: minmax(0, 1fr); }
+  .qc-summary-table { min-width: 760px; }
+}

@@ -1,16 +1,39 @@
 import React, { useMemo } from 'react';
 import FieldInput from './FieldInput';
 import SearchableSelect from './SearchableSelect';
+import ColorTagInput from './ColorTagInput';
+import SizeRangeInput from './SizeRangeInput';
 import {
   HOUR_SLOTS,
   ORDER_DETAIL_FIELDS,
   FORM_TITLE,
   PRODUCTION_DETAILS_TITLE,
+  COLOR_SUGGESTIONS,
+  SIZE_PRESETS,
   computeDailySummary,
   emptyHourly,
 } from '../config/dailyProductionForm';
-import { orderLabel, orderPrefill, splitValues } from '../config/orderWorkflow';
+import { orderPrefill, splitValues, joinValues } from '../config/orderWorkflow';
 import { achievementVsTarget } from '../config/smvTargetEngine';
+import { dailyTargetFrom, PRODUCTIVE_SHIFT_HOURS } from '../config/workingHours';
+
+/**
+ * The Daily Target shown on the compact entry form.
+ *
+ * The brief's rule: Daily Target = Hourly Target × active working hours. When the
+ * supervisor types a manual hourly target it wins; otherwise the SMV-derived
+ * hourly figure stands. Working Hours defaults to the standard shift (10, narrowed
+ * by the lunch break where the caller has worked that out) so the figure is never
+ * blank on a fresh form.
+ */
+function compactDailyTarget(formValues, derivedTarget, derivedHourlyTarget) {
+  const hours = Number(formValues.working_hours)
+    || Number(formValues.working_hours_active)
+    || PRODUCTIVE_SHIFT_HOURS;
+  const hourly = Number(formValues.hourly_target) || derivedHourlyTarget || 0;
+  if (hourly > 0) return dailyTargetFrom(hourly, hours);
+  return derivedTarget || formValues.daily_target || 0;
+}
 
 /**
  * Live achievement against the derived target.
@@ -248,6 +271,10 @@ export function DailyProductionForm({
   processOptions = [],
   onSelectOrder,
   onSelectProcess,
+  // The style's agreed capacity and today's date key, so the order picker can
+  // prefill Working Hours and Manpower and set the Production Date to today.
+  capacity,
+  today,
   // The target derived from the process sheet, and its per-hour share, for the
   // live achievement read-out. Supplied by the page; the modal omits them.
   derivedTarget = 0,
@@ -257,6 +284,10 @@ export function DailyProductionForm({
   // End-of-Day Summary. The full three-section template stays available to the page
   // view, which passes `compact={false}` (the default).
   compact = false,
+  // The processes chosen for this entry, one target each. `processes` is the list of
+  // names; `targets` maps a name to the daily target set for it. Both live on the
+  // form values so a saved entry reloads exactly as it was entered.
+  onSetProcessTargets,
 }) {
   // When the caller wires up Order Management, the order-owned fields are shown
   // read-only and a searchable picker takes over filling them. Without the wiring
@@ -284,6 +315,8 @@ export function DailyProductionForm({
             processOptions={processOptions}
             onSelectOrder={onSelectOrder}
             onSelectProcess={onSelectProcess}
+            capacity={capacity}
+            today={today}
           />
 
           {orderDriven && !formValues.style && (
@@ -323,20 +356,42 @@ export function DailyProductionForm({
               />
             </label>
             <label className="form-field">
-              <span>Daily Target <em className="auto-note">(auto)</em></span>
-              <input value={derivedTarget || formValues.daily_target || ''} readOnly disabled placeholder="—" />
+              <span>Hourly Target <em className="auto-note">(manual — else derived)</em></span>
+              {/* The MANUAL hourly target. Typing here overrides the SMV-derived
+                  figure and drives both the daily target (hourly × active hours)
+                  and the live variance below. Left blank, the derived figure stands. */}
+              <input
+                type="number"
+                min="0"
+                value={formValues.hourly_target ?? ''}
+                disabled={readOnly}
+                onChange={(e) => onChange({ ...formValues, hourly_target: e.target.value })}
+                placeholder={derivedHourlyTarget ? String(derivedHourlyTarget) : '0'}
+              />
             </label>
             <label className="form-field">
-              <span>Hourly Target <em className="auto-note">(auto)</em></span>
-              <input value={derivedHourlyTarget || ''} readOnly disabled placeholder="—" />
+              <span>Working Hours</span>
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={formValues.working_hours ?? ''}
+                disabled={readOnly}
+                onChange={(e) => onChange({ ...formValues, working_hours: e.target.value })}
+                placeholder="10"
+              />
+            </label>
+            <label className="form-field">
+              <span>Daily Target <em className="auto-note">(hourly × hours)</em></span>
+              <input value={compactDailyTarget(formValues, derivedTarget, derivedHourlyTarget)} readOnly disabled placeholder="—" />
             </label>
           </div>
 
           <AchievementPanel
-            target={derivedTarget || formValues.daily_target}
+            target={compactDailyTarget(formValues, derivedTarget, derivedHourlyTarget)}
             achieved={formValues.quantity}
             smv={formValues.smv}
-            perHourTarget={derivedHourlyTarget}
+            perHourTarget={Number(formValues.hourly_target) || derivedHourlyTarget}
           />
         </section>
       ) : (
@@ -352,6 +407,8 @@ export function DailyProductionForm({
               processOptions={processOptions}
               onSelectOrder={onSelectOrder}
               onSelectProcess={onSelectProcess}
+              capacity={capacity}
+              today={today}
             />
 
             {orderDriven && !formValues.style && (
@@ -367,15 +424,49 @@ export function DailyProductionForm({
               </p>
             )}
 
-            {/* Live achievement against the derived target. Shown as soon as there is
+            {/* Manual hourly target + the daily target it drives. Typing an hourly
+                figure overrides the SMV-derived one; the daily target is the hourly
+                figure over the day's active hours, so both modules read the same
+                number. */}
+            {!readOnly && (
+              <div className="dp-target-manual">
+                <label className="form-field">
+                  <span>Hourly Target <em className="auto-note">(manual)</em></span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={formValues.hourly_target ?? ''}
+                    onChange={(e) => onChange({ ...formValues, hourly_target: e.target.value })}
+                    placeholder={derivedHourlyTarget ? String(derivedHourlyTarget) : '0'}
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Working Hours</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={formValues.working_hours ?? ''}
+                    onChange={(e) => onChange({ ...formValues, working_hours: e.target.value })}
+                    placeholder="10"
+                  />
+                </label>
+                <span className="dp-target-note">
+                  Daily Target ={' '}
+                  <strong>{compactDailyTarget(formValues, derivedTarget, derivedHourlyTarget).toLocaleString()}</strong> pcs
+                </span>
+              </div>
+            )}
+
+            {/* Live achievement against the target. Shown as soon as there is
                 a target or an actual to compare, so the supervisor sees the surplus or
                 shortfall while they are still typing rather than at the end of the day. */}
-            {!readOnly && (derivedTarget > 0 || Number(formValues.quantity) > 0) && (
+            {!readOnly && (derivedTarget > 0 || Number(formValues.quantity) > 0 || Number(formValues.hourly_target) > 0) && (
               <AchievementPanel
-                target={derivedTarget || formValues.daily_target}
+                target={compactDailyTarget(formValues, derivedTarget, derivedHourlyTarget)}
                 achieved={formValues.quantity}
                 smv={formValues.smv}
-                perHourTarget={derivedHourlyTarget}
+                perHourTarget={Number(formValues.hourly_target) || derivedHourlyTarget}
               />
             )}
           </FormSection>
@@ -422,6 +513,20 @@ function DetailsFields({
   onSelectOrder,
   onSelectProcess,
 }) {
+  // The processes chosen for this entry, and the target set for each.
+  const chosenProcesses = splitValues(formValues.processes ?? formValues.process);
+  const targets = formValues.process_targets || {};
+
+  /** Toggles one process, seeding its target box from the sheet's own figure. */
+  function setChosenProcesses(next) {
+    onChange({ ...formValues, processes: joinValues(next) });
+  }
+
+  /** One process's daily target, typed by the supervisor. */
+  function setProcessTarget(name, value) {
+    onChange({ ...formValues, process_targets: { ...targets, [name]: value } });
+  }
+
   return (
     <>
       {orderDriven && !readOnly && (
@@ -447,31 +552,124 @@ function DetailsFields({
 
       <div className="dp-detail-grid">
         {ORDER_DETAIL_FIELDS.map((field) => {
-          // The process dropdown replaces the plain input when a sheet has been
-          // uploaded for the selected style.
+          // Colour and Size Range hold SEVERAL values, so each gets the SAME
+          // checkbox dropdown Order Input uses: a searchable list of options with
+          // a tick beside each, an "Add" row for a value the list does not carry,
+          // and a fixed-height closed box that shows the first two chips plus a
+          // "+N more" badge. The stored value stays the comma-separated string the
+          // rest of the app already reads.
+          //
+          // These sit in a <div>, not a <label>: the control is click-driven, and
+          // a label forwards every click to its first control — which would snap
+          // the menu shut the instant an option was ticked.
+          if (field.name === 'color' || field.name === 'size_range') {
+            return (
+              <div className="form-field" key={field.name} role="group" aria-label={field.label}>
+                <span>{field.label} <em className="auto-note">(from order)</em></span>
+                {field.name === 'color' ? (
+                  <ColorTagInput
+                    id={`dp-${field.name}`}
+                    value={formValues[field.name]}
+                    onChange={(v) => onChange({ ...formValues, [field.name]: v })}
+                    suggestions={COLOR_SUGGESTIONS}
+                    placeholder="Select colours…"
+                    disabled={readOnly}
+                    ariaLabel="Colours on this entry"
+                  />
+                ) : (
+                  <SizeRangeInput
+                    id={`dp-${field.name}`}
+                    value={formValues[field.name]}
+                    onChange={(v) => onChange({ ...formValues, [field.name]: v })}
+                    options={SIZE_PRESETS}
+                    disabled={readOnly}
+                    ariaLabel="Size range for this entry"
+                  />
+                )}
+              </div>
+            );
+          }
+
+          // The process field becomes a MULTI-select, and each chosen process gets
+          // its own target box underneath. That is what the brief asks for: several
+          // processes on one entry, each with an individual target.
           if (field.name === 'process' && !readOnly && processOptions.length > 0) {
             return (
-              <label className="form-field" key={field.name}>
+              <div className="form-field fp-field" key={field.name} style={{ gridColumn: '1 / -1' }}>
                 <span>{field.label}</span>
                 <SearchableSelect
-                  value={formValues.process || ''}
-                  onChange={(value) => (onSelectProcess ? onSelectProcess(value) : onChange({ ...formValues, process: value }))}
+                  multiple
+                  value={chosenProcesses}
+                  onChange={setChosenProcesses}
                   options={processOptions}
-                  placeholder="Search operation…"
+                  placeholder="Search operation… (pick one or more)"
                   emptyMessage="No operations on this style's uploaded sheet"
-                  ariaLabel="Select the operation this entry records"
+                  ariaLabel="Select one or more operations this entry records"
                 />
-              </label>
+
+                {chosenProcesses.length > 0 && (
+                  <div className="fp-targets">
+                    <span className="fp-targets-title">
+                      Daily Target per process
+                      <em className="auto-note"> (auto from SMV — editable)</em>
+                    </span>
+                    <div className="fp-targets-grid">
+                      {chosenProcesses.map((name) => {
+                        const option = processOptions.find((o) => String(o.value) === String(name));
+                        return (
+                          <label className="fp-target-cell" key={name}>
+                            <span className="fp-target-name" title={name}>{name}</span>
+                            <input
+                              type="number"
+                              className="dp-hour-input"
+                              value={targets[name] ?? ''}
+                              onChange={(e) => setProcessTarget(name, e.target.value)}
+                              aria-label={`Daily target for ${name}`}
+                              placeholder="0"
+                            />
+                            {option?.hint && <span className="fp-target-hint">{option.hint}</span>}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
             );
           }
 
           if (orderDriven && orderFieldNames.has(field.name)) {
+            // Filled by the picker, but NO LONGER locked: the order gives the
+            // starting values and the supervisor may correct any of them for the
+            // day actually being recorded (a line moved, a supervisor swapped).
+            // The "(from order)" note says where the value came from rather than
+            // forbidding a change.
             const value = formValues[field.name];
             const filled = value !== undefined && value !== null && value !== '';
             return (
               <label className="form-field" key={field.name}>
                 <span>{field.label} <em className="auto-note">(from order)</em></span>
-                <input value={filled ? value : ''} placeholder="—" disabled readOnly />
+                <input
+                  type={field.type === 'number' ? 'number' : 'text'}
+                  value={filled ? value : ''}
+                  disabled={readOnly}
+                  onChange={(e) => onChange({ ...formValues, [field.name]: e.target.value })}
+                  placeholder="—"
+                />
+              </label>
+            );
+          }
+
+          // The Daily Target is the SUM of the per-process targets, shown rather
+          // than typed. Displaying it here means the form still states the day's
+          // target in one figure, while the inputs that set it live against the
+          // processes they belong to.
+          if (field.name === 'daily_target') {
+            const sum = chosenProcesses.reduce((acc, n) => acc + (Number(targets[n]) || 0), 0);
+            return (
+              <label className="form-field" key={field.name}>
+                <span>{field.label} <em className="auto-note">(sum of processes)</em></span>
+                <input value={sum || ''} readOnly disabled placeholder="—" />
               </label>
             );
           }

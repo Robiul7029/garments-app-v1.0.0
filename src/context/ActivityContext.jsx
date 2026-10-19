@@ -166,7 +166,11 @@ export function ActivityProvider({ children }) {
       moduleKey: key,
       moduleLabel: meta.label,
       categoryLabel: meta.categoryLabel,
-      targetRoute: path,
+      // The route the bell opens when this notification is clicked. It is the
+      // module's path resolved by `describe(key)` above and already carried on the
+      // row as `path` — there is no local `path` binding here, which is what threw
+      // "ReferenceError: path is not defined" on every recorded action.
+      targetRoute: meta.path,
       entryId: row.entryId,
       actor: row.actor,
       recipient: recipient || user || null,

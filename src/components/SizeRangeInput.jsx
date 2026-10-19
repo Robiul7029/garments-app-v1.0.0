@@ -12,10 +12,14 @@ import MultiSelectDropdown from './MultiSelectDropdown';
  *      shows up as a production variance nobody can explain.
  *
  * So every standard size is offered as a CHECKBOX in a filterable dropdown, the
- * chosen sizes show as removable chips in the closed box, and a counter badge
- * beside the field shows exactly how many are selected. A size the ladder does
- * not list (a 7XL, or a numeric waist size) is still accepted through the
+ * first two chosen sizes show as removable tags in the closed box, and a counter
+ * badge beside the field shows exactly how many are selected. A size the ladder
+ * does not list (a 7XL, or a numeric waist size) is still accepted through the
  * dropdown's "Add" row, so the control never blocks a real order.
+ *
+ * A full range is 8–10 sizes, so the box shows at most TWO tags and collapses
+ * the rest into a "+N more" badge. That is what keeps a ten-size order on one
+ * line — the box is a fixed height and never expands to break the form.
  *
  * The VALUE reported is the stored string form ("XS, S, M, L, XL…"), so the
  * saved record and every existing reader are unchanged.
@@ -27,6 +31,8 @@ export default function SizeRangeInput({
   ariaLabel = 'Size range for this order',
   disabled = false,
   options = SIZE_PRESETS,
+  // Two tags, then a "+N more" badge. See the note above on why this is fixed.
+  maxVisibleTags = 2,
 }) {
   return (
     <MultiSelectDropdown
@@ -39,6 +45,7 @@ export default function SizeRangeInput({
       addLabel="Other size…"
       ariaLabel={ariaLabel}
       disabled={disabled}
+      maxVisibleTags={maxVisibleTags}
       className="sz-wrap"
       optionTone="msd-tone-size"
     />

@@ -50,8 +50,11 @@ describe('the capacity panel', () => {
   });
 
   it('shows every operation with its own target and SMV', () => {
-    const html = render(<CapacityPanel operations={SHEET} settings={settings} onSettingsChange={() => { }} />);
-    ['Collar Attach', 'Sleeve Join', 'Side Seam', 'Hemming'].forEach((op) => expect(html).toContain(op));
+    const longSheet = [...SHEET, ...Array.from({ length: 12 }, (_, i) => ({ operation: `Operation ${i + 5}`, smv: 1 }))];
+    const html = render(<CapacityPanel operations={longSheet} settings={settings} onSettingsChange={() => { }} />);
+    ['Collar Attach', 'Sleeve Join', 'Side Seam', 'Hemming', 'Operation 16'].forEach((op) => expect(html).toContain(op));
+    expect(html).not.toContain('Show all');
+    expect(html).toContain('cap-table-wrap');
     expect(html).toContain('Hourly capacity');
     expect(html).toContain('Daily capacity');
     expect(html).toContain('7,000'); // Collar Attach, 8400 ÷ 1.2
@@ -86,6 +89,12 @@ describe('the capacity panel', () => {
     expect(html).toContain('Bar Tack');
   });
 
+  it('keeps the save action after the scrollable operations table', () => {
+    const html = render(<CapacityPanel operations={SHEET} settings={settings} onSettingsChange={() => { }} onSave={() => { }} />);
+    expect(html.indexOf('cap-table-wrap')).toBeLessThan(html.indexOf('cap-foot'));
+    expect(html).toContain('Save targets for this style');
+  });
+
   it('offers to save the targets for the style', () => {
     const html = render(<CapacityPanel operations={SHEET} settings={settings} onSettingsChange={() => { }} onSave={() => { }} />);
     expect(html).toContain('Save targets for this style');
@@ -114,6 +123,17 @@ describe('the capacity panel', () => {
       <CapacityPanel operations={SHEET} settings={settings} onSettingsChange={() => { }} canSave={false} />,
     );
     expect(html).not.toContain('Save targets for this style');
+  });
+
+  it('keeps the save button enabled so the sequential check can prompt', () => {
+    // The button is no longer hard-disabled when the figures look incomplete —
+    // pressing it must reach the field-by-field check and show the first prompt.
+    const html = render(
+      <CapacityPanel operations={SHEET} settings={{ manpower: '', workingHours: '', efficiency: '' }} onSettingsChange={() => { }} onSave={() => { }} />,
+    );
+    expect(html).toContain('Save targets for this style');
+    // Not rendered with the disabled attribute.
+    expect(html).not.toMatch(/disabled[^>]*>\s*Save targets for this style/);
   });
 });
 

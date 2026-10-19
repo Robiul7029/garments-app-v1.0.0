@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { toNumber, toDateKey, summariseProductionDay } from '../../utils/erpCalculations';
+import { rowOutput, rowHourlyTarget, rowWorkingHours } from '../../config/productionAggregation';
 import { summariseStock } from '../../utils/erpDashboard';
 import { useErpOverview } from './useErpOverview';
 
@@ -32,7 +33,7 @@ export function useErpDashboardModel(today) {
   // through untouched, so destructuring them here would just be dead bindings.
   const {
     lines, todayProduction, totals, linePerformance, orderRows, stock,
-    quality, manpower, liveCounts,
+    quality, manpower, liveCounts, dailyProduction,
   } = base;
 
   /**
@@ -40,6 +41,15 @@ export function useErpDashboardModel(today) {
    * Falls back to the line collection, then to a padded "Line-0N" the way the
    * standalone design labelled unassigned lines.
    */
+  const operatorTotals = useMemo(() => {
+    const target = todayProduction.reduce((sum, row) => {
+      const hours = rowWorkingHours(row);
+      return sum + (rowHourlyTarget(row) * hours);
+    }, 0);
+    const actual = todayProduction.reduce((sum, row) => sum + rowOutput(row), 0);
+    return { target, actual, achievement: target > 0 ? Math.round((actual / target) * 1000) / 10 : 0 };
+  }, [todayProduction]);
+
   const productionRows = useMemo(() => {
     const nameFor = (lineId, index) => {
       if (lineId && lineId !== 'unassigned') {
@@ -349,6 +359,7 @@ export function useErpDashboardModel(today) {
     ...base,
     productionRows,
     productionTable,
+    operatorTotals,
     flow,
     orderTable,
     inventoryRows,
@@ -365,6 +376,8 @@ export function useErpDashboardModel(today) {
     // the whole dashboard down with it. Guarded as well as corrected: a missing
     // count must never be able to crash the home route again.
     ordersCount: liveCounts?.orders ?? 0,
+    operatorTotals,
+    dailyProduction,
   };
 }
 

@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MODULE } from '../../config/erpRoles';
 import { C, ORDER_STATUS } from '../../config/erpSchema';
+import { COLLECTIONS } from '../../config/orderWorkflow';
 import { usePermissions } from '../../context/PermissionContext';
 import { useErpData } from '../../context/ErpDataContext';
+import { useData } from '../../context/DataContext';
 import {
   summariseProductionDay, performanceLevel, toNumber, toDateKey, efficiencyPercent,
 } from '../../utils/erpCalculations';
 import { summariseStock, daysUntil } from '../../utils/erpDashboard';
+import { isActiveOrder, isEligibleForAutomaticStatus, resolveOrderStatus } from '../../utils/orderStatus';
+import { rowOutput } from '../../config/productionAggregation';
 
 /**
  * ROBIUL GARMENTS ERP — overview aggregation.
@@ -31,6 +35,7 @@ export function useErpSources() {
   const sources = useMemo(() => ([
     { key: 'lines', collection: C.PRODUCTION_LINES, pageSize: 100, needs: MODULE.PRODUCTION },
     { key: 'production', collection: C.HOURLY_PRODUCTION, pageSize: 500, needs: MODULE.PRODUCTION },
+    { key: 'dailyProduction', collection: C.DAILY_PRODUCTION, pageSize: 500, needs: MODULE.PRODUCTION },
     { key: 'shifts', collection: C.LINE_SHIFTS, pageSize: 200, needs: MODULE.PRODUCTION },
     { key: 'purchaseOrders', collection: C.PURCHASE_ORDERS, pageSize: 200, needs: MODULE.ORDERS },
     { key: 'orders', collection: C.ORDERS, pageSize: 200, needs: MODULE.ORDERS },
@@ -81,14 +86,27 @@ export function toDatePart(value) {
 export function useErpOverview(today) {
   const erp = useErpData();
   const permissions = usePermissions();
+  // The order master (Order Management → Order Input) is written to the app's
+  // own store (`DataContext` → localStorage, collection `order-model`), NOT to
+  // Firestore. Reading it here is what lets the Management Dashboard and Order
+  // Management share ONE order book: a PO raised on the Order Input screen shows
+  // on the dashboard without a second, parallel order list to reconcile. The
+  // provider sits ABOVE this one in App.jsx, so this hook can always read it.
+  const legacyData = useData();
 
   const canInventory = permissions.canView(MODULE.INVENTORY);
 
   const lines = erp.rows('lines');
   const allProduction = erp.rows('production');
+  const dailyProduction = erp.rows('dailyProduction');
   const shifts = erp.rows('shifts');
   const purchaseOrders = erp.rows('purchaseOrders');
-  const orders = erp.rows('orders');
+  // Order master rows come from the app's own store; guard the reader so a screen
+  // rendered outside the DataProvider (a unit test, a deep link) still works.
+  const orders = useMemo(
+    () => (legacyData?.getData ? legacyData.getData(COLLECTIONS.ORDERS) : []),
+    [legacyData],
+  );
   const buyers = erp.rows('buyers');
   const qcRows = erp.rows('endLineQc');
   const items = erp.rows('items');
@@ -99,13 +117,24 @@ export function useErpOverview(today) {
     () => allProduction.filter((r) => toDatePart(r.date) === today),
     [allProduction, today]
   );
+  const todayDailyProduction = useMemo(
+    () => dailyProduction.filter((r) => toDatePart(r.date) === today),
+    [dailyProduction, today],
+  );
+  const standaloneDailyProduction = useMemo(
+    () => todayDailyProduction.filter((row) => row.source !== 'hourly'),
+    [todayDailyProduction],
+  );
+  // Hourly-derived daily copies are excluded to avoid duplicate totals; standalone
+  // daily log entries supplement the hourly records.
+  const productionForTotals = [...todayProduction, ...standaloneDailyProduction];
 
   // ---- Production ---------------------------------------------------------
-  const totals = useMemo(() => summariseProductionDay(todayProduction), [todayProduction]);
+  const totals = useMemo(() => summariseProductionDay(productionForTotals), [productionForTotals]);
 
   const linePerformance = useMemo(() => {
     const byLine = {};
-    todayProduction.forEach((row) => {
+    productionForTotals.forEach((row) => {
       const id = row.lineId || 'unassigned';
       (byLine[id] = byLine[id] || []).push(row);
     });
@@ -117,7 +146,7 @@ export function useErpOverview(today) {
         ...summariseProductionDay(rows),
       };
     }).sort((a, b) => a.achievement - b.achievement); // worst first: the line to walk to
-  }, [todayProduction, lines]);
+  }, [productionForTotals, lines]);
 
   const lineChartData = useMemo(
     () => linePerformance.slice(0, 8).map((line) => ({
@@ -215,38 +244,145 @@ export function useErpOverview(today) {
   }, [qcRows, today]);
 
   // ---- Orders -------------------------------------------------------------
+  //
+  // The order book is built from BOTH collections Order Management writes to:
+  //
+  //   purchaseOrders  the shipping side — `totalQty`, `shippedQty`, `shipmentDate`
+  //   orders          the order master  — `orderNo`, `orderDate`, `deliveryDate`,
+  //                   `totalQty`, `status`
+  //
+  // A PO that links to a master is merged into one row; a master with no PO of its
+  // own is still listed (that is the common case on a deployment where the plan is
+  // entered before the PO is raised). Building from POs alone silently dropped any
+  // order that only existed in the master — which is what made the Active Orders
+  // counter read zero while the Order Management list showed two.
   const orderRows = useMemo(() => {
     const orderById = {};
     orders.forEach((o) => { orderById[o.id] = o; });
     const buyerNames = {};
     buyers.forEach((b) => { buyerNames[b.id] = b.name || b.buyerCode || b.id; });
 
-    return purchaseOrders.map((po) => {
-      const order = orderById[po.orderId] || {};
-      const buyerId = po.buyerId || order.buyerId;
-      const total = toNumber(po.totalQty);
-      const shipped = toNumber(po.shippedQty);
-      const progress = total > 0 ? Math.min(100, Math.round((shipped / total) * 100)) : 0;
-      // The promised date lives on the order on this deployment, the shipment
-      // date on the PO; either is a usable deadline, so prefer the PO's.
-      const due = po.shipmentDate || order.deliveryDate || '';
-      const status = po.status || ORDER_STATUS.NEW;
+    const cumulativeProduction = [
+      ...allProduction,
+      ...dailyProduction.filter((row) => row.source !== 'hourly'),
+    ];
+
+    /** Production recorded against one identity set (PO ids + order numbers). */
+    const producedFor = (linkedIds, linkedNumbers) => cumulativeProduction
+      .filter((row) => (
+        linkedIds.has(String(row.purchaseOrderId || row.poId || row.orderId || ''))
+        || linkedNumbers.has(String(row.poNo || row.order_no || ''))
+      ))
+      .reduce((sum, row) => sum + rowOutput(row), 0);
+
+    /** One unified row, from either source. */
+    const buildRow = (source, master) => {
+      const order = master || {};
+      const buyerId = source.buyerId || order.buyerId;
+      // Quantity: the ERP purchase order's `totalQty`, or the order master's own
+      // `qty` (the key `OrderInput` writes). Either is the PO quantity.
+      const total = toNumber(
+        source.totalQty ?? source.poQty ?? order.totalQty ?? order.qty ?? source.qty,
+      );
+      const shipped = toNumber(source.shippedQty ?? order.shippedQty);
+
+      const linkedOrderIds = new Set([source.id, source.orderId, order.id].filter(Boolean).map(String));
+      const relatedOrders = orders.filter((candidate) => (
+        String(candidate.id) === String(source.orderId)
+        || (source.orderNo && String(candidate.orderNo) === String(source.orderNo))
+        || (source.order_no && String(candidate.order_no) === String(source.order_no))
+      ));
+      const linkedOrderNumbers = new Set([
+        source.poNo, source.orderNo, source.order_no,
+        ...relatedOrders.map((candidate) => candidate.poNo || candidate.orderNo || candidate.order_no),
+      ].filter(Boolean).map(String));
+      const produced = producedFor(linkedOrderIds, linkedOrderNumbers);
+      const fulfilled = Math.max(shipped, produced);
+
+      // The window. The order master's own keys first (both the ERP schema's
+      // `orderDate` / `deliveryDate` and the app store's `start_date` / `ship_date`),
+      // then the PO spellings, so EVERY write shape is understood. Read from the
+      // source itself as well as the joined master, because an order-master row
+      // with no PO is its own source. A missing bound is open, never a rejection.
+      const start = order.orderDate || order.start_date || order.order_date
+        || source.orderDate || source.start_date || source.order_date || source.poDate || '';
+      const due = order.deliveryDate || order.ship_date || order.delivery_date
+        || source.deliveryDate || source.ship_date || source.delivery_date || source.shipmentDate || '';
+
+      // The status is resolved against the SAME window the active rule uses, so
+      // the badge and the counter can never disagree.
+      const statusState = resolveOrderStatus(
+        { ...source, startDate: start, shipmentDate: due, producedQty: fulfilled },
+        today,
+      );
+      const eligibleForAuto = isEligibleForAutomaticStatus(source.status || ORDER_STATUS.NEW);
+      const effectiveStatus = source.manualStatusOverride
+        ? (source.status || ORDER_STATUS.NEW)
+        : (eligibleForAuto ? statusState.status : (source.status || ORDER_STATUS.NEW));
+      const progress = total > 0 ? Math.min(100, Math.round((Math.max(shipped, fulfilled) / total) * 100)) : 0;
+      const status = effectiveStatus;
       const daysLeft = daysUntil(due, today);
-      const open = !CLOSED_STATUSES.includes(String(status));
+      const open = isActiveOrder(
+        { ...source, startDate: start, shipmentDate: due, producedQty: fulfilled, status: effectiveStatus },
+        today,
+      );
       const overdue = open && daysLeft !== null && daysLeft < 0;
       const dueSoon = open && daysLeft !== null && daysLeft >= 0 && daysLeft <= 7;
+      // Identity is resolved defensively: a row missing `poNo` / `orderNo` falls
+      // back to the style, then the document id, so the table and the count never
+      // lose an order to a blank label.
+      const orderNo = source.poNo || source.orderNo || source.order_no || order.orderNo
+        || order.styleNo || order.style || source.styleNo || source.style || source.id || '—';
       return {
-        id: po.id,
-        poNo: po.poNo || '—',
-        buyer: buyerNames[buyerId] || buyerId || '—',
-        due, daysLeft, total, shipped, progress, status, overdue, dueSoon, open,
+        id: source.id ?? order.id,
+        poNo: orderNo,
+        orderNo,
+        styleNo: order.styleNo || order.style || source.styleNo || source.style || '',
+        buyer: buyerNames[buyerId] || order.buyer || source.buyer || buyerId || '—',
+        start,
+        due,
+        daysLeft,
+        total,
+        shipped,
+        fulfilled,
+        produced,
+        progress,
+        status,
+        rawStatus: source.status || ORDER_STATUS.NEW,
+        overdue,
+        dueSoon,
+        open,
+        autoStatus: !source.manualStatusOverride && eligibleForAuto ? statusState.autoStatus : '',
         level: overdue ? 'critical' : dueSoon ? 'warning' : progress >= 100 ? 'good' : 'info',
       };
-    }).sort((a, b) => {
+    };
+
+    const rows = purchaseOrders.map((po) => buildRow(po, orderById[po.orderId]));
+
+    // Every order-master row is listed too. A row already represented by a PO (by
+    // linked id or by order number) is skipped so the same order is never counted
+    // twice; everything else — the common case, a plan entered before its PO — is
+    // added on its own. This is what makes the count reflect the Order Management
+    // list even when no purchase order exists yet.
+    const claimedOrderIds = new Set(
+      purchaseOrders.map((po) => String(po.orderId || '')).filter(Boolean),
+    );
+    const claimedOrderNos = new Set(
+      purchaseOrders.flatMap((po) => [po.poNo, po.orderNo, po.order_no])
+        .filter(Boolean).map(String),
+    );
+    orders.forEach((order) => {
+      if (claimedOrderIds.has(String(order.id))) return;
+      const orderKeys = [order.orderNo, order.order_no].filter(Boolean).map(String);
+      if (orderKeys.some((k) => claimedOrderNos.has(k))) return;
+      rows.push(buildRow(order, order));
+    });
+
+    return rows.sort((a, b) => {
       const rank = (r) => (r.overdue ? 0 : r.dueSoon ? 1 : r.level === 'good' ? 3 : 2);
       return rank(a) - rank(b) || String(a.due || '9999').localeCompare(String(b.due || '9999'));
     });
-  }, [purchaseOrders, orders, buyers, today]);
+  }, [purchaseOrders, orders, buyers, today, allProduction, dailyProduction]);
 
   const orderStats = useMemo(() => ({
     total: orderRows.length,
@@ -335,12 +471,14 @@ export function useErpOverview(today) {
 
   return {
     canInventory,
-    lines, allProduction, shifts, qcRows, items, stockRows,
-    todayProduction, totals, linePerformance, lineChartData, trend, kpiTrend,
+    lines, allProduction, dailyProduction, shifts, qcRows, items, stockRows,
+    todayProduction: productionForTotals, totals, linePerformance, lineChartData, trend, kpiTrend,
     manpower, quality, orderRows, orderStats, orderDonut, stock, topAlerts, alertSummary,
     liveCounts: {
       lines: lines.length,
-      production: allProduction.length,
+      production: productionForTotals.length,
+      hourlyProduction: allProduction.length,
+      dailyProduction: dailyProduction.length,
       shifts: shifts.length,
       purchaseOrders: purchaseOrders.length,
       orders: orders.length,

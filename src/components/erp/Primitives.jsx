@@ -96,13 +96,21 @@ export function ErrorState({ message = 'Something went wrong.', onRetry, retryLa
   );
 }
 
-/** Permission denied. Deliberately not an error page — it is a normal state. */
+/**
+ * Read-only note.
+ *
+ * This used to be a full-page "Access restricted" lock screen. Under the
+ * View-Only model a signed-in user may always READ a page, so there is nothing
+ * to lock them out of and no screen renders a wall any more. What remains is a
+ * small, inline explanation a screen MAY place above read-only data when it
+ * wants to say why the action controls are absent — deliberately not a wall, and
+ * deliberately not an error: seeing data you cannot change is a normal state.
+ */
 export function DeniedState({ moduleLabel = 'this module' }) {
   return (
-    <div className="erp-state erp-state-denied" role="alert">
-      <div className="erp-state-icon" aria-hidden="true">🔒</div>
-      <h3>Access restricted</h3>
-      <p>Your role does not include {moduleLabel}. Ask an administrator if you need access.</p>
+    <div className="erp-notice erp-notice-info" role="status">
+      <span aria-hidden="true">🔒</span>
+      <span>View only — your role can read {moduleLabel} but not change it. Ask an administrator if you need edit access.</span>
     </div>
   );
 }

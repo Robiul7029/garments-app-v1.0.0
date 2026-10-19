@@ -1,6 +1,38 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
 import { auth, authPersistenceReady, db } from '../firebase';
+
+/**
+ * The page URL, or `null` when the browser cannot supply it.
+ *
+ * `window.location.href` is not guaranteed to be a string: a tab being restored by the
+ * browser, an extension that relaunches the page, or a `about:blank` window momentarily
+ * hands back `undefined`. Firebase's `isSignInWithEmailLink` then calls `.indexOf` on it
+ * and throws `Cannot read properties of undefined (reading 'indexOf')`, which used to
+ * abort the whole auth bootstrap — the `[Auth] auth bootstrap failed` entry in the
+ * console, with the app left on "Checking your session…".
+ */
+function currentUrl() {
+  try {
+    const href = window.location?.href;
+    return typeof href === 'string' && href.length > 0 ? href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when this page is a Firebase email-link sign-in. Never throws. */
+function isEmailSignInLink(url) {
+  if (!url) return false;
+  try {
+    return isSignInWithEmailLink(auth, url);
+  } catch (error) {
+    // A malformed or half-written URL is simply "not an email link"; the normal sign-in
+    // screen handles it. It must never take the bootstrap down with it.
+    console.warn('[Auth] email-link check skipped', error?.message || error);
+    return false;
+  }
+}
 import { securitySettingsRef } from '../utils/security';
 import { isElevatedRecord } from '../utils/access';
 import {
@@ -431,10 +463,13 @@ export function AuthProvider({ children }) {
     // the Firestore profile and reports the result to the login screen.
     const handleEmailLink = async () => {
       // `window.location` was previously written as `window.Location`, which is undefined,
-      // so this whole branch never ran. Read the URL once, correctly.
-      if (!active || !isSignInWithEmailLink(window.location.href)) return;
+      // so this whole branch never ran. Read the URL once, correctly, and guard it: a tab
+      // restored by the browser can report no URL at all, and passing that to Firebase
+      // throws from inside the check.
+      const url = currentUrl();
+      if (!active || !isEmailSignInLink(url)) return;
       try {
-        const result = await signInWithEmailLink(auth, window.location.href);
+        const result = await signInWithEmailLink(auth, url);
         if (!active) return;
         window.history.replaceState({}, document.title, '/login');
         await auth.currentUser?.reload();
@@ -483,14 +518,18 @@ export function AuthProvider({ children }) {
     authPersistenceReady
       .then(() => {
         if (!active) return;
+        // The listener is attached FIRST and unconditionally: a failure while reading the
+        // URL (the email-link branch) must never be the reason no sign-in is ever heard.
         unsubscribeAuthState = onAuthStateChanged(auth, handleAuthState);
         // Runs after the listener is attached, so the two never race.
         return handleEmailLink();
       })
       .catch((error) => {
         // Persistence failed (blocked storage) or the link could not be consumed: nothing
-        // can ever answer, so release the gate rather than leaving a permanent spinner.
+        // can ever answer, so log it and release the gate rather than leaving the app on
+        // the loading screen for ever. The normal sign-in screen is the fallback.
         logAuthError('auth bootstrap failed', error);
+        settle();
       })
       .finally(() => {
         // Not `settle()`: that would release the gate before the listener has reported and

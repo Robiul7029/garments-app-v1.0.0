@@ -18,6 +18,9 @@ export const ACTION = {
   DELETE: 'delete',
   APPROVE: 'approve',
   EXPORT: 'export',
+  // Adding a document (a process sheet, an import) to a module. Granted wherever
+  // CREATE is granted — see `withUpload` — so it is never a separate decision.
+  UPLOAD: 'upload',
 };
 
 // ---- ERP modules -----------------------------------------------------------
@@ -41,6 +44,11 @@ export const MODULE = {
   QUALITY: 'quality',
   INVENTORY: 'inventory',
   PROCUREMENT: 'procurement',
+  // Two sidebar sections that own screens of their own (Cutting Department and
+  // Line Input & WIP). They must exist as modules or the menu entry and the router
+  // guard resolve to `undefined`.
+  PRODUCTION_CUTTING: 'productionCutting',
+  LINE_INPUT: 'lineInput',
   HR: 'hr',
   MANPOWER: 'manpower',
   MAINTENANCE: 'maintenance',
@@ -63,6 +71,8 @@ export const MODULE_LABELS = {
   quality: 'Quality Control',
   inventory: 'Store & Inventory',
   procurement: 'Procurement',
+  productionCutting: 'Cutting Department',
+  lineInput: 'Line Input & WIP',
   hr: 'HR & Employee',
   manpower: 'Manpower Management',
   maintenance: 'Machine & Maintenance',
@@ -95,6 +105,20 @@ export const ROLES = {
 
 export const ROLE_LIST = Object.values(ROLES);
 
+/**
+ * The ERP role an approved Manager account holds.
+ *
+ * A manager signs in through the Manager Access portal, where the app stores the legacy
+ * role `manager` (mapped to the session role `admin`) — not an `erpRoles` entry. Without a
+ * mapping every such account held NO ERP role at all, so the matrix answered "no" to
+ * canCreate / canEdit / canDelete / canUpload on every page and the Process Sheet Upload
+ * control disappeared even though the account could edit data.
+ *
+ * `production_manager` is the role the approval flow already grants a manager, so this is
+ * one definition used by the client matrix, the session fallback and firestore.rules.
+ */
+export const MANAGER_ERP_ROLE = ROLES.PRODUCTION_MANAGER;
+
 export const ROLE_LABELS = {
   super_admin: 'Super Admin',
   management: 'Management',
@@ -121,6 +145,7 @@ const E = ACTION.EDIT;
 const D = ACTION.DELETE;
 const A = ACTION.APPROVE;
 const X = ACTION.EXPORT;
+const U = ACTION.UPLOAD;
 
 /**
  * Per-role grants. Omitted actions mean "not granted" — never "granted by
@@ -208,13 +233,24 @@ export const PERMISSIONS = {
   [ROLES.PRODUCTION_MANAGER]: {
     [MODULE.DASHBOARD]: [V],
     [MODULE.ALERTS]: [V],
-    [MODULE.ORDERS]: [V],
+    // ORDER & MERCHANDISING. The manager holds the full create / edit / delete / upload
+    // set here — this is the role the Manager Access portal approves (MANAGER_ERP_ROLE),
+    // and the Order Input and Process Sheet Upload screens live in this module. Keeping
+    // it at VIEW was what hid every upload control from a signed-in manager.
+    [MODULE.ORDERS]: [V, C, E, D, A, X],
+    // Cutting and Line Input are production manager screens too.
+    [MODULE.PRODUCTION_CUTTING]: [V, C, E, D, X, U],
+    [MODULE.LINE_INPUT]: [V, C, E, D, X, U],
     [MODULE.PLANNING]: [V],
     [MODULE.PRODUCTION]: [V, C, E, D, A, X],
     [MODULE.OPERATOR_PERFORMANCE]: [V, C, E, X],
-    [MODULE.QUALITY]: [V, X],
+    // Quality Control: the manager reviews and corrects QC records (create / edit /
+    // delete), so the permission matrix matches what the Manager role is asked to do.
+    [MODULE.QUALITY]: [V, C, E, D, X],
     [MODULE.HR]: [V],
-    [MODULE.MANPOWER]: [V, C, E, X],
+    // Manpower and maintenance: the manager's own workbook. Full write set, including
+    // UPLOAD so an import beside the manual form is offered on the same grant.
+    [MODULE.MANPOWER]: [V, C, E, D, X, U],
     [MODULE.MAINTENANCE]: [V, C, X],
     [MODULE.PACKING]: [V],
     [MODULE.REPORTS]: [V, X],
@@ -223,6 +259,9 @@ export const PERMISSIONS = {
   [ROLES.SUPERVISOR]: {
     [MODULE.DASHBOARD]: [V],
     [MODULE.ALERTS]: [V],
+    // The floorman's own screens: the cutting entry and the line feeding form.
+    [MODULE.PRODUCTION_CUTTING]: [V, C, E],
+    [MODULE.LINE_INPUT]: [V, C, E],
     [MODULE.PRODUCTION]: [V, C, E],
     [MODULE.OPERATOR_PERFORMANCE]: [V],
     [MODULE.QUALITY]: [V, C],
@@ -319,7 +358,7 @@ export const PERMISSIONS = {
 function allModulesAllActions() {
   const out = {};
   Object.values(MODULE).forEach((m) => {
-    out[m] = [V, C, E, D, A, X];
+    out[m] = [V, C, E, D, A, X, U];
   });
   return out;
 }
@@ -333,12 +372,27 @@ function allModulesAllActions() {
 export function actionsFor(record, moduleKey) {
   if (!record) return [];
   const held = collectRoles(record);
-  if (held.length === 0) return [];
   const merged = new Set();
   held.forEach((role) => {
     (PERMISSIONS[role]?.[moduleKey] || []).forEach((a) => merged.add(a));
   });
-  return [...merged];
+  // READ IS THE BASELINE. Every signed-in account may VIEW every module, so no page can
+  // raise a full-page lock screen; only the WRITE actions (create / edit / delete /
+  // approve / upload) come from the role matrix. A null record is still "not signed in"
+  // and is answered above, so this widens nothing for a visitor.
+  merged.add(ACTION.VIEW);
+  return withUpload([...merged]);
+}
+
+/**
+ * Uploading a document (a process sheet, an import file) is a CREATE of a record, so
+ * a role allowed to create holds it as well. Deriving it here is what makes `canUpload`
+ * and `canCreate` impossible to disagree with one another.
+ */
+export function withUpload(actions) {
+  const out = new Set(actions || []);
+  if (out.has(ACTION.CREATE)) out.add(ACTION.UPLOAD);
+  return [...out];
 }
 
 /** True when the user holds `action` on `moduleKey`. */
@@ -367,9 +421,44 @@ export function collectRoles(record) {
   };
   add(record.erpRole);
   if (Array.isArray(record.erpRoles)) record.erpRoles.forEach(add);
-  // The legacy `role` field is NOT mapped here on purpose: a legacy 'admin' is a
-  // production manager in the old model and must not silently gain ERP rights.
+  // A record that carries only the legacy Manager Access shape (`role: 'manager'` plus an
+  // approved status) holds the manager ERP role too. Such a record is the one an approved
+  // manager's `users/{uid}` document has, and WITHOUT this mapping the matrix answered
+  // "no" to every write — canCreate / canEdit / canDelete / canUpload — on every page, so
+  // the Process Sheet Upload control disappeared for the account that should own it.
+  //
+  // Deliberately narrow, so it never widens the matrix:
+  //   - an UNAPPROVED (pending / rejected) manager is not mapped, so approval still gates;
+  //   - a record that already names explicit roles (`erpRole` / `erpRoles`) keeps exactly
+  //     those roles — the merge is not used to add rights on top of a deliberate grant;
+  //   - the string 'admin' alone is not mapped (the old production-manager model), and a
+  //     general user (`role: 'viewer'`) proves nothing.
+  if (isLegacyManagerRecord(record) && out.size === 0) out.add(MANAGER_ERP_ROLE);
   return [...out];
+}
+
+/** True for the legacy Manager Access record: `role: 'manager'` and an approved status. */
+export function isLegacyManagerRecord(record) {
+  return String(record?.role || '').trim().toLowerCase() === 'manager' && isApprovedRecord(record);
+}
+
+/** True when the record says `manager` in any of the fields the approval flow writes. */
+export function declaresManagerRole(record) {
+  if (!record) return false;
+  const normalise = (value) => String(value || '').trim().toLowerCase();
+  if (normalise(record.role) === 'manager') return true;
+  if (Array.isArray(record.roles) && record.roles.some((value) => normalise(value) === 'manager')) return true;
+  return normalise(record.erpRole) === 'manager'
+    || (Array.isArray(record.erpRoles) && record.erpRoles.some((value) => normalise(value) === 'manager'));
+}
+
+/** True when an approval flag on the record says approved / active / verified. */
+export function isApprovedRecord(record) {
+  if (!record) return false;
+  if (record.isSuperAdmin === true) return true;
+  return ['status', 'managerStatus']
+    .map((key) => String(record[key] || '').trim().toLowerCase())
+    .some((value) => value === 'approved' || value === 'active' || value === 'verified');
 }
 
 /** Roles missing from the 15-role list but present on a user record (data hygiene). */

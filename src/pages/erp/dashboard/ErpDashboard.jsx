@@ -12,6 +12,7 @@ import { formatShort } from '../../../utils/erpDashboard';
 import {
   useErpDashboardModel, FLOW_COLORS, dayKey,
 } from '../../../components/erp/useErpDashboardModel';
+import { useHourlyMirrorReadiness } from '../../../hooks/useHourlyMirrorReadiness';
 
 /**
  * ROBIUL GARMENTS ERP — Overview / Dashboard.
@@ -41,7 +42,20 @@ import {
 export default function ErpDashboard() {
   const today = dayKey(new Date());
   const model = useErpDashboardModel(today);
+  // Whether floor entries can reach this dashboard at all. `hourlyProduction`
+  // requires a `lineId`, which the mirror resolves from the `productionLines`
+  // master by name — so an empty master means every new hourly save is skipped
+  // and these figures stay at zero for no obvious reason.
+  const mirror = useHourlyMirrorReadiness();
   const [note, setNote] = useState(null);
+
+  // One sentence, singular or plural, so the notice reads naturally either way.
+  const mirrorWarning = mirror.missingMaster
+    ? `Production lines are not set up. ${formatNumber(mirror.hourlyRowCount)} hourly `
+      + `${mirror.hourlyRowCount === 1 ? 'entry is' : 'entries are'} saved on this device but `
+      + 'cannot appear here, because the ERP line master is empty. Add each line '
+      + '(Line-01, Line-02…) in the ERP first; existing entries sync on their next save.'
+    : '';
 
   const { loading, error, liveCounts, totals, stock, quality, orderStats } = model;
 
@@ -67,22 +81,23 @@ export default function ErpDashboard() {
 
   return (
     <div className="rge-dash">
+      {/* The header is the title alone. The factory/date subtitle and the two
+          top-right actions (Run alert rules, Open reports) were removed to keep
+          this area clean — the date is on the KPI cards and both actions are
+          reachable from their own modules in the sidebar. */}
       <header className="rge-dash-head">
-        <div>
-          <h1 className="rge-dash-title">Dashboard</h1>
-          <p className="rge-dash-sub">
-            Single Factory • English • Production Management • {formatDay(today)}
-          </p>
-        </div>
-        <div className="rge-dash-actions">
-          <button type="button" className="rge-btn rge-btn-secondary" onClick={runRules}>
-            🔔 Run alert rules
-          </button>
-          <Link className="rge-btn rge-btn-primary" to={erpModulePath(MODULE.REPORTS)}>
-            Open reports
-          </Link>
-        </div>
+        <h1 className="rge-dash-title">Dashboard</h1>
       </header>
+
+      {/* Setup notice, shown only once the line master has settled on empty AND
+          the floor has hourly rows waiting on it. Amber rather than red: the local
+          records are safe, this is a master-data step, not a failure. It
+          disappears on its own the moment a line is added. */}
+      {mirror.missingMaster && (
+        <div className="rge-note rge-note-warning" role="status">
+          {mirrorWarning}
+        </div>
+      )}
 
       {note && (
         <div className={`rge-note rge-note-${note.kind === 'error' ? 'error' : 'success'}`} role="status">
@@ -97,6 +112,9 @@ export default function ErpDashboard() {
           <div className="rge-card rge-kpi-panel">
             <div className="rge-kpi-label">Active Orders</div>
             <div className="rge-kpi-value">{formatNumber(orderStats.pending)}</div>
+            <div className="rge-kpi-sub" title="Orders currently inside their Start–Delivery window and not yet fully produced">
+              In production window
+            </div>
             <TrendNote trend={model.kpiTrend.delayed} label="Trend" />
           </div>
 
@@ -114,6 +132,7 @@ export default function ErpDashboard() {
             <div className="rge-kpi-value">
               {model.canInventory ? formatMoney(stock.totalValue) : '—'}
             </div>
+            {model.canInventory && <div className="rge-kpi-sub">{formatNumber(stock.totalQty)} units in stock</div>}
             {model.canInventory && (
               <div
                 className="rge-bar rge-bar-good"
@@ -128,7 +147,21 @@ export default function ErpDashboard() {
         </div>
       </section>
 
-      {/* ============ 2. PRODUCTION STATUS + ORDER MANAGEMENT ============ */}
+      {/* ============ 2. OPERATOR OUTPUT + EFFICIENCY WIDGETS ============
+          Two interactive summary cards that route straight to the matching
+          segment of the Operator Performance screen. They are here rather than
+          inside a panel because they are the two questions a manager asks first
+          in the morning — "what did we make, and how efficiently" — and each one
+          is a link, so the figure and the detail behind it are one click apart. */}
+      <section className="rge-section">
+        <h2 className="rge-section-title">Operator Performance</h2>
+        <div className="rge-widget-row">
+          <OperatorOutputWidget model={model} />
+          <EfficiencyWidget model={model} />
+        </div>
+      </section>
+
+      {/* ============ 3. PRODUCTION STATUS + ORDER MANAGEMENT ============ */}
       <section className="rge-section rge-cols">
         <div className="rge-card">
           <h2 className="rge-card-title">
@@ -153,7 +186,7 @@ export default function ErpDashboard() {
         </div>
       </section>
 
-      {/* ============ 3. INVENTORY OVERVIEW ============ */}
+      {/* ============ 4. INVENTORY OVERVIEW ============ */}
       <section className="rge-section rge-cols-even">
         <div className="rge-card">
           <h2 className="rge-card-title">
@@ -205,7 +238,7 @@ export default function ErpDashboard() {
         </div>
       </section>
 
-      {/* ============ 4. PRODUCTION FLOW + TREND ============ */}
+      {/* ============ 5. PRODUCTION FLOW + TREND ============ */}
       <section className="rge-section rge-cols">
         <div className="rge-card">
           <h2 className="rge-card-title">
@@ -228,7 +261,7 @@ export default function ErpDashboard() {
         </div>
       </section>
 
-      {/* ============ 5. ORDER STATUS + QUALITY + ALERTS ============ */}
+      {/* ============ 6. ORDER STATUS + QUALITY + ALERTS ============ */}
       <section className="rge-section rge-grid-3">
         <div className="rge-card">
           <h2 className="rge-card-title">Order Status</h2>
@@ -373,6 +406,88 @@ function OrderMiniTable({ rows = [] }) {
   );
 }
 
+/* ---- Interactive summary widgets ------------------------------------------- */
+
+/**
+ * Operator Output widget.
+ *
+ * Today's pieces, target against achievement, a progress bar, and a link that
+ * activates the Output segment of the Operator Performance screen
+ * (`/operator-performance?tab=output`).
+ */
+function OperatorOutputWidget({ model }) {
+  const { operatorTotals = {} } = model;
+  const actual = Number(operatorTotals.actual) || 0;
+  const target = Number(operatorTotals.target) || 0;
+  const achievement = Number(operatorTotals.achievement) || 0;
+
+  return (
+    <Link className="rge-card rge-widget" to="/operator-performance?tab=output">
+      <div className="rge-widget-head">
+        <span className="rge-widget-title">🏭 Operator Output</span>
+        <span className={`rge-badge rge-badge-${achievement >= 90 ? 'good' : achievement >= 70 ? 'warning' : 'critical'}`}>
+          {achievement.toFixed(1)}%
+        </span>
+      </div>
+      <div className="rge-widget-value">{formatNumber(actual)}<span className="rge-widget-unit"> pcs</span></div>
+      <div className="rge-widget-sub">
+        Target {formatNumber(target)} pcs · {achievement.toFixed(1)}% achievement
+      </div>
+      <div
+        className={`rge-bar ${achievement >= 90 ? 'rge-bar-good' : achievement >= 70 ? 'rge-bar-warning' : 'rge-bar-critical'}`}
+        style={{ marginTop: 12 }}
+        role="img"
+        aria-label={`Achievement ${achievement.toFixed(1)}%`}
+      >
+        <span style={{ width: `${Math.min(100, Math.max(0, achievement))}%` }} />
+      </div>
+      <span className="rge-widget-link">View Output Details →</span>
+    </Link>
+  );
+}
+
+/**
+ * Efficiency % widget.
+ *
+ * The line's average efficiency, the high and low performer counts, a status
+ * badge and a link that activates the Efficiency segment of the Operator
+ * Performance screen (`/operator-performance?tab=efficiency`).
+ */
+function EfficiencyWidget({ model }) {
+  const { totals, linePerformance } = model;
+  const efficiency = Number(totals.efficiency) || 0;
+
+  // The high / low counts are read off the SAME per-line performance the
+  // Production Status panel uses, so the widget and the panel cannot disagree.
+  // Guarded: a role that may not read production gets no rows, and a missing
+  // array must degrade to "no lines" rather than crash the home route.
+  const lines = Array.isArray(linePerformance) ? linePerformance : [];
+  const high = lines.filter((l) => Number(l.efficiency) >= 85).length;
+  const low = lines.filter((l) => Number(l.efficiency) > 0 && Number(l.efficiency) < 70).length;
+  const level = efficiency >= 85 ? 'good' : efficiency >= 70 ? 'warning' : 'critical';
+
+  return (
+    <Link className="rge-card rge-widget" to="/operator-performance?tab=efficiency">
+      <div className="rge-widget-head">
+        <span className="rge-widget-title">⚡ Efficiency %</span>
+        <span className={`rge-badge rge-badge-${level}`}>
+          {level === 'good' ? 'On target' : level === 'warning' ? 'Below target' : 'Needs attention'}
+        </span>
+      </div>
+      <div className={`rge-widget-value rge-level-${level}`}>
+        {efficiency.toFixed(1)}<span className="rge-widget-unit">%</span>
+      </div>
+      <div className="rge-widget-sub">Average line efficiency today</div>
+      <div className="rge-widget-performers">
+        <span className="rge-perf-chip rge-perf-high">🏆 {high} high</span>
+        <span className="rge-perf-chip rge-perf-low">📉 {low} low</span>
+        <span className="rge-perf-chip">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
+      </div>
+      <span className="rge-widget-link">View Efficiency Details →</span>
+    </Link>
+  );
+}
+
 /* ---- helpers --------------------------------------------------------------- */
 
 /** A PO's pill tone. An overdue PO outranks whatever its status field claims. */
@@ -395,10 +510,4 @@ function qualityLevel(rejectPct) {
 function formatMoney(value) {
   const n = Number(value) || 0;
   return `৳${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function formatDay(key) {
-  const d = new Date(`${key}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return key;
-  return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }

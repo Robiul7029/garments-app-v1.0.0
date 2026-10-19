@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useRole } from '../context/RoleContext';
 import { downloadCSV } from '../utils/csv';
@@ -9,8 +9,18 @@ import {
   ATTENDANCE_WORKERS,
   STATUS,
   STATUS_LABEL,
+  CUSTOM_DESIGNATION,
+  CUSTOM_DESIGNATION_LABEL,
+  DESIGNATION_OPTIONS_KEY,
+  designationOptionsFor,
+  addDesignationOption,
+  matchingDesignation,
+  cleanDesignation,
+  normalizeDesignation,
   directoryList,
   buildEmployeeRecord,
+  validateEmployee,
+  resolveDesignation,
   nextEmployeeId,
   bumpSequence,
   findByName,
@@ -53,11 +63,43 @@ export default function LineDeploymentPage({ category, item }) {
   const sequenceValue = Array.isArray(sequence) ? sequence[0] || 0 : sequence || 0;
 
   const employees = useMemo(() => directoryList(directory), [directory]);
+  // The designations the user ADDED by hand with the form's "+ Add" button. Kept in
+  // their own store so an added grade survives before any employee carries it — the
+  // directory alone only knows a custom value once a record holds it.
+  const storedDesignationOptions = getData(DESIGNATION_OPTIONS_KEY);
+  /**
+   * The designations the form and the table offer.
+   *
+   * The preset grades, plus any custom value the directory already carries, plus any
+   * value added by hand — so a post recorded once, or added with "+ Add", is selectable
+   * for the next person in it rather than having to be retyped.
+   */
+  const designationOptions = useMemo(
+    () => designationOptionsFor(directory, storedDesignationOptions),
+    [directory, storedDesignationOptions],
+  );
   const [name, setName] = useState('');
+  // The grade chosen in the form. Part of the record, and the field the Supervisor
+  // Name dropdown on Total Line Output filters on. `CUSTOM_DESIGNATION` means "the
+  // value in `customDesignation`" — see `resolveDesignation`.
+  const [designation, setDesignation] = useState('');
+  const [customDesignation, setCustomDesignation] = useState('');
+  // Whether the custom Designation menu is open. The "+ Add" box lives INSIDE this
+  // menu rather than beside the control, so the whole choice — pick an existing grade
+  // or name a new one — happens in one place.
+  const [designationOpen, setDesignationOpen] = useState(false);
+  // The menu and its trigger, so a click anywhere else can close it.
+  const designationRef = useRef(null);
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
+  // The designation being edited INLINE in the table's row, so a grade can be
+  // corrected without opening the name editor.
+  const [editDesignation, setEditDesignation] = useState('');
   const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
+  // Field-level validation: which box is wrong and what to say under it. There is
+  // deliberately no form-level banner — the brief asks for the message beneath the
+  // field it belongs to, and this form has only two fields to get wrong.
+  const [fieldErrors, setFieldErrors] = useState({});
   // Set when the local save succeeded but the Firestore mirror could not be
   // written. Kept separate from `error` because the edit itself DID land.
   const [syncWarning, setSyncWarning] = useState('');
@@ -140,40 +182,100 @@ export default function LineDeploymentPage({ category, item }) {
     });
   }
 
+  /**
+   * The "+ Add" row INSIDE the Designation menu.
+   *
+   * Does two things at once, which is the whole point of the button:
+   *
+   *   1. INSTANTLY selects the typed value in the Designation field, so the choice is
+   *      made without a second trip to the menu;
+   *   2. PERSISTS it into the active options list, so the grade is selectable for the
+   *      next person rather than having to be retyped.
+   *
+   * A value that is already on the list (in any casing) is not added a second time —
+   * the existing spelling is selected instead, so the menu keeps one canonical
+   * entry per grade. A blank box is a no-op with a message under the field rather than
+   * a silent failure.
+   */
+  function addCustomDesignation() {
+    const typed = cleanDesignation(customDesignation);
+    if (!typed) {
+      setFieldErrors((prev) => ({ ...prev, customDesignation: 'Type the new designation to add it.' }));
+      return;
+    }
+
+    // The store is only written when the value is genuinely new. `null` means the list
+    // already carries it, so nothing is persisted — just selected.
+    const nextStored = addDesignationOption(storedDesignationOptions, typed, designationOptions);
+    if (nextStored) setRaw(DESIGNATION_OPTIONS_KEY, nextStored);
+
+    // Select the list's own spelling when it already exists, otherwise the typed value.
+    setDesignation(matchingDesignation(designationOptions, typed));
+    setCustomDesignation('');
+    // The choice is made, so the menu closes — the field now shows the new grade.
+    setDesignationOpen(false);
+    setFieldErrors((prev) => ({ ...prev, designation: '', customDesignation: '' }));
+    setNotice(
+      nextStored
+        ? `\u201c${typed}\u201d added to the designation list and selected.`
+        : `\u201c${matchingDesignation(designationOptions, typed)}\u201d is already on the list and has been selected.`,
+    );
+  }
+
+  /** Picks a grade from the menu and closes it. */
+  function chooseDesignation(value) {
+    setDesignation(value);
+    // Leaving the custom route drops whatever was typed, so a value half-typed then
+    // abandoned cannot be saved onto a record.
+    if (value !== CUSTOM_DESIGNATION) setCustomDesignation('');
+    setDesignationOpen(false);
+    setFieldErrors((prev) => ({ ...prev, designation: '', customDesignation: '' }));
+  }
+
+  // A click anywhere outside the Designation control closes its menu, which is what a
+  // native <select> does for free and a custom menu has to do itself.
+  useEffect(() => {
+    if (!designationOpen) return undefined;
+    function onPointerDown(event) {
+      if (designationRef.current && !designationRef.current.contains(event.target)) {
+        setDesignationOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+    };
+  }, [designationOpen]);
+
   function submit(e) {
     e.preventDefault();
-    setError('');
     setNotice('');
     setSyncWarning('');
 
-    const clean = name.trim().replace(/\s+/g, ' ');
-    if (!clean) {
-      setError('Enter the employee’s full name.');
-      return;
-    }
+    // Field-by-field validation, so each message appears under its own box. The
+    // unique-name rule lives in `validateEmployee` beside the directory helpers, so
+    // the form and its tests share one definition of what is wrong.
+    const errors = validateEmployee(
+      { name, designation, customDesignation },
+      employees,
+      { designationOptions },
+    );
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
 
-    // A duplicate name is REFUSED, not merely flagged.
-    //
-    // This reverses the earlier behaviour, and the reason is worth stating: the
-    // directory is what every other form selects a person from, and those forms
-    // store the NAME, not the Employee ID. Two rows sharing a name are therefore
-    // indistinguishable downstream — a production entry could not say which
-    // Salma it meant, and payroll would pay the wrong one. The name has to be
-    // unique for the rest of the app to work, so it is enforced here.
-    const existing = findByName(employees, clean);
-    if (existing) {
-      setError(
-        `“${existing.name}” is already in the directory as ${existing.employeeId}. `
-        + 'Employee names must be unique — edit that record instead of adding it again.',
-      );
-      return;
-    }
+    const clean = name.trim().replace(/\s+/g, ' ');
+    // The custom route resolves to the typed value; every other route is the
+    // chosen grade. `resolveDesignation` owns that branch so the form and its tests
+    // cannot disagree about what the sentinel means.
+    const chosen = resolveDesignation({ designation, customDesignation });
 
     let record;
     try {
-      record = buildEmployeeRecord(clean, employees, undefined, sequenceValue);
+      record = buildEmployeeRecord(clean, employees, undefined, sequenceValue, chosen);
     } catch (err) {
-      setError(err.message);
+      setFieldErrors({ name: err.message });
       return;
     }
 
@@ -182,10 +284,14 @@ export default function LineDeploymentPage({ category, item }) {
     // record is deleted later.
     setRaw(EMPLOYEE_SEQ_KEY, [bumpSequence(sequenceValue, record.employeeId)]);
     setName('');
+    setDesignation('');
+    setCustomDesignation('');
+    setFieldErrors({});
     // `record.employeeId`'s numeric tail is the Smart Attendance workerId, which
     // is what makes the new person immediately clockable there.
     setNotice(
-      `Added ${record.name} as ${record.employeeId}, linked to Smart Attendance as worker `
+      `Added ${record.name} as ${record.employeeId}`
+      + `${record.designation ? ` (${record.designation})` : ''}, linked to Smart Attendance as worker `
       + `${Number(record.employeeId.replace(/\\D/g, '')) || ''}. They are now selectable on every form.`,
     );
   }
@@ -193,15 +299,21 @@ export default function LineDeploymentPage({ category, item }) {
   function startEdit(employee) {
     setEditingId(employee.id);
     setEditName(employee.name);
+    setEditDesignation(employee.designation || '');
     setNotice('');
-    setError('');
+    setFieldErrors({});
   }
 
+  /**
+   * Saves a row's name AND designation together.
+   *
+   * Both are written in one pass because the editor holds both: saving the name
+   * alone would silently discard a grade the user had just changed in the same row.
+   */
   function commitEdit(employee) {
-    setError('');
     const clean = editName.trim().replace(/\s+/g, ' ');
     if (!clean) {
-      setError('A name cannot be empty.');
+      setFieldErrors({ editName: 'A name cannot be empty.' });
       return;
     }
 
@@ -210,14 +322,19 @@ export default function LineDeploymentPage({ category, item }) {
     // itself.
     const clash = findByName(employees.filter((e) => e.id !== employee.id), clean);
     if (clash) {
-      setError(`“${clash.name}” is already in the directory as ${clash.employeeId}. Choose a different name.`);
+      setFieldErrors({
+        editName: `“${clash.name}” is already in the directory as ${clash.employeeId}. Choose a different name.`,
+      });
       return;
     }
+    setFieldErrors({});
 
     // The record is replaced in place, so the Employee ID it already holds is
     // preserved — renaming must never reissue an ID that attendance rows,
     // payroll and printed rosters already refer to.
-    const next = directory.map((r) => (r.id === employee.id ? { ...r, name: clean } : r));
+    const next = directory.map((r) => (
+      r.id === employee.id ? { ...r, name: clean, designation: normalizeDesignation(editDesignation) } : r
+    ));
     saveDirectory(next);
 
     // A rename also has to reach the attendance rows that already name the person,
@@ -234,6 +351,7 @@ export default function LineDeploymentPage({ category, item }) {
 
     setEditingId(null);
     setEditName('');
+    setEditDesignation('');
     setNotice(`${employee.employeeId} renamed to ${clean}. The change is reflected in Smart Attendance and every dropdown.`);
   }
 
@@ -241,7 +359,7 @@ export default function LineDeploymentPage({ category, item }) {
   function requestRemove(employee) {
     setPendingDelete(employee);
     setPurge(false);
-    setError('');
+    setFieldErrors({});
   }
 
   /**
@@ -336,35 +454,136 @@ export default function LineDeploymentPage({ category, item }) {
           <span>{syncWarning}</span>
         </div>
       )}
-      {error && (
-        <div className="erp-notice erp-notice-error dp-notice" role="alert">
-          <span aria-hidden="true">⛔</span>
-          <span>{error}</span>
-        </div>
-      )}
+      {/* The form-level error banner that used to sit here is gone: every failure
+          on this form belongs to a FIELD, so the message is rendered under that
+          field instead. A banner made the reader work out which box it meant. */}
 
       {isAdmin ? (
-        <form className="dp-entry-card" onSubmit={submit}>
+        <form className="dp-entry-card" onSubmit={submit} noValidate>
           <h3 className="dp-recent-title">Add employee</h3>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <label className="form-field" style={{ flex: '1 1 280px', maxWidth: 420 }}>
+          <div className="ld-add-grid">
+            <label className={`form-field ld-add-name${fieldErrors.name ? ' field-invalid' : ''}`}>
               <span>Full Name <em className="req-star">*</em></span>
               <input
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  // The box just changed — drop its message so the form stops
+                  // accusing a field the user is already fixing.
+                  setFieldErrors((prev) => (prev.name ? { ...prev, name: '' } : prev));
+                }}
                 placeholder="e.g. Salma Khatun"
                 autoComplete="off"
+                aria-label="Employee full name"
+                aria-invalid={Boolean(fieldErrors.name)}
+                aria-describedby={fieldErrors.name ? 'ld-name-error' : undefined}
               />
+              {fieldErrors.name && (
+                <span className="field-error-tip" id="ld-name-error" role="alert">{fieldErrors.name}</span>
+              )}
             </label>
-            <label className="form-field" style={{ flex: '0 0 160px' }}>
+
+            <div className={`form-field ld-add-designation${fieldErrors.designation ? ' field-invalid' : ''}`}>
+              <span id="ld-designation-label">Designation <em className="req-star">*</em></span>
+              {/* A CUSTOM menu rather than a native <select>, because the "+ Add" row has
+                  to live INSIDE the open menu. A <select> can only hold <option>s, so the
+                  box and its button had to sit outside it — here the whole choice (pick an
+                  existing grade, or name a new one) happens in one panel. */}
+              <div className="ld-select" ref={designationRef}>
+                <button
+                  type="button"
+                  className={`ld-select-control${designationOpen ? ' ld-select-open' : ''}${fieldErrors.designation ? ' field-invalid' : ''}`}
+                  onClick={() => setDesignationOpen((open) => !open)}
+                  onKeyDown={(e) => { if (e.key === 'Escape') setDesignationOpen(false); }}
+                  aria-haspopup="listbox"
+                  aria-expanded={designationOpen}
+                  aria-labelledby="ld-designation-label"
+                  aria-label="Employee designation"
+                  aria-invalid={Boolean(fieldErrors.designation)}
+                  aria-describedby={fieldErrors.designation ? 'ld-designation-error' : undefined}
+                >
+                  <span className={designation ? '' : 'ld-select-placeholder'}>
+                    {designation === CUSTOM_DESIGNATION
+                      ? CUSTOM_DESIGNATION_LABEL
+                      : (designation || 'Select designation')}
+                  </span>
+                  <span className="ld-select-caret" aria-hidden="true">▾</span>
+                </button>
+
+                {designationOpen && (
+                  <div className="ld-select-menu" role="listbox" aria-label="Designation options">
+                    <ul className="ld-select-list">
+                      {designationOptions.map((d) => (
+                        <li key={d}>
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={designation === d}
+                            className={`ld-select-option${designation === d ? ' ld-select-option-on' : ''}`}
+                            onClick={() => chooseDesignation(d)}
+                          >
+                            {d}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+
+                    {/* THE "+ ADD" ROW — pinned to the foot of the open menu, so a grade
+                        the list does not carry is created without leaving the dropdown.
+                        Enter in the box does the same as clicking the button. */}
+                    <div className="ld-select-add">
+                      <input
+                        className={`ld-select-add-input${fieldErrors.customDesignation ? ' field-invalid' : ''}`}
+                        value={customDesignation}
+                        onChange={(e) => {
+                          setCustomDesignation(e.target.value);
+                          setFieldErrors((prev) => (prev.customDesignation ? { ...prev, customDesignation: '' } : prev));
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); addCustomDesignation(); }
+                        }}
+                        placeholder="Add new designation"
+                        aria-label="New designation to add"
+                        aria-invalid={Boolean(fieldErrors.customDesignation)}
+                        aria-describedby={fieldErrors.customDesignation ? 'ld-custom-designation-error' : undefined}
+                      />
+                      <button
+                        type="button"
+                        className="ld-select-add-btn"
+                        onClick={addCustomDesignation}
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {fieldErrors.designation && (
+                <span className="field-error-tip" id="ld-designation-error" role="alert">{fieldErrors.designation}</span>
+              )}
+              {fieldErrors.customDesignation && (
+                <span className="field-error-tip" id="ld-custom-designation-error" role="alert">
+                  {fieldErrors.customDesignation}
+                </span>
+              )}
+            </div>
+
+            <label className="form-field ld-add-id">
               <span>Employee ID <em className="auto-note">(auto)</em></span>
-              <input value={pendingId} disabled readOnly />
+              {/* Auto-issued and never typed: the ID is what attendance, payroll
+                  and printed rosters already reference, so it must not be edited
+                  into a collision. `readOnly` AND `disabled` — the first keeps a
+                  screen reader from offering it as a field, the second makes the
+                  lock visible. */}
+              <input value={pendingId} disabled readOnly aria-label="Employee ID, generated automatically" />
             </label>
-            <button type="submit" className="btn btn-primary" style={{ marginBottom: 1 }}>Submit</button>
+
+            <button type="submit" className="btn btn-primary ld-add-submit">Submit</button>
           </div>
           <p className="hint" style={{ marginTop: 12 }}>
             The Employee ID is generated automatically and never reused, so it stays valid on attendance,
-            payroll and printed rosters.
+            payroll and printed rosters. The designation is what the Supervisor Name dropdown on
+            Total Line Output selects from.
           </p>
         </form>
       ) : (
@@ -416,12 +635,17 @@ export default function LineDeploymentPage({ category, item }) {
         </div>
       </div>
 
-      <div className="table-wrap" style={{ marginTop: 10 }}>
-        <table className="dp-table">
+      {/* A bounded, scrollable box with a FROZEN header row: a long roster scrolls
+          under the column titles instead of taking them out of sight. `ld-table-wrap`
+          supplies the max-height and the sticky anchoring; the `sticky top-0 z-10
+          bg-surface` on the header row is what pins it. */}
+      <div className="table-wrap ld-table-wrap" style={{ marginTop: 10 }}>
+        <table className="dp-table ld-table">
           <thead>
-            <tr>
+            <tr className="ld-thead-row sticky top-0 z-10 bg-surface">
               <th style={{ width: 140 }}>Employee ID</th>
               <th>Full Name</th>
+              <th style={{ width: 140 }}>Designation</th>
               <th style={{ width: 110 }}>Status</th>
               {isAdmin && <th style={{ width: 190 }}>Action</th>}
             </tr>
@@ -429,7 +653,7 @@ export default function LineDeploymentPage({ category, item }) {
           <tbody>
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={isAdmin ? 4 : 3} className="empty-row">
+                <td colSpan={isAdmin ? 5 : 4} className="empty-row">
                   {employees.length === 0
                     ? 'No employees yet — add a name above and the Employee ID is issued automatically.'
                     : 'No employee matches that search.'}
@@ -443,18 +667,46 @@ export default function LineDeploymentPage({ category, item }) {
                   <td className="mono-cell dp-strong">{employee.employeeId}</td>
                   <td>
                     {isEditing ? (
-                      <input
-                        className="dp-remark-input"
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); commitEdit(employee); }
-                          if (e.key === 'Escape') { setEditingId(null); setEditName(''); }
-                        }}
-                        autoFocus
-                        aria-label={`Rename ${employee.name}`}
-                      />
+                      <>
+                        <input
+                          className="dp-remark-input"
+                          value={editName}
+                          onChange={(e) => {
+                            setEditName(e.target.value);
+                            setFieldErrors((prev) => (prev.editName ? { ...prev, editName: '' } : prev));
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); commitEdit(employee); }
+                            if (e.key === 'Escape') { setEditingId(null); setEditName(''); setEditDesignation(''); setFieldErrors({}); }
+                          }}
+                          autoFocus
+                          aria-label={`Rename ${employee.name}`}
+                          aria-invalid={Boolean(fieldErrors.editName)}
+                        />
+                        {/* The rename's own validation, under the box it is about. */}
+                        {fieldErrors.editName && (
+                          <span className="field-error-tip" role="alert">{fieldErrors.editName}</span>
+                        )}
+                      </>
                     ) : employee.name}
+                  </td>
+                  {/* The Designation cell is EDITABLE in place: a grade is corrected
+                      where it is read, without opening the name editor. The list is
+                      the presets plus any custom value already in use, so a post
+                      recorded once is selectable for the next person in it. */}
+                  <td>
+                    {isEditing ? (
+                      <select
+                        className="dp-remark-input"
+                        value={editDesignation}
+                        onChange={(e) => setEditDesignation(e.target.value)}
+                        aria-label={`Designation for ${employee.name}`}
+                      >
+                        {designationOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    ) : (
+                      <span className="erp-badge erp-badge-neutral">{employee.designation}</span>
+                    )}
                   </td>
                   <td>
                     <span className={`erp-badge erp-badge-${
@@ -468,7 +720,7 @@ export default function LineDeploymentPage({ category, item }) {
                       {isEditing ? (
                         <>
                           <button className="btn btn-outline btn-sm" onClick={() => commitEdit(employee)}>Save</button>
-                          <button className="btn btn-outline btn-sm" onClick={() => { setEditingId(null); setEditName(''); }}>Cancel</button>
+                          <button className="btn btn-outline btn-sm" onClick={() => { setEditingId(null); setEditName(''); setEditDesignation(''); setFieldErrors({}); }}>Cancel</button>
                         </>
                       ) : !isSelectable(employee) ? (
                         /* A dormant record gets ONE action: put them back. Renaming

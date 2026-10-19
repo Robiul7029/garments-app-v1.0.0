@@ -1,6 +1,50 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useAuth } from './AuthContext';
 import { useActivity } from './ActivityContext';
+import { aggregateDaily } from '../config/productionAggregation';
+import {
+  NON_ROW_KEYS,
+  ensureCategories,
+  mergeRows,
+  migrateFlatCollections,
+  readLegacyStore,
+  removeRow,
+  subscribeAll,
+  uploadLocalStore,
+  writeRow,
+} from '../services/appDataStore';
+import { probeFirestoreConnection } from '../firebase';
+
+// Keys that are local bookkeeping, not rows: a name list and an ID counter. They are
+// derived from the roster/Smart Attendance, so they stay on the device.
+const NON_CLOUD_KEYS = new Set([...NON_ROW_KEYS]);
+
+// Every write goes to Firestore; localStorage remains an offline CACHE so the
+// screens open instantly and keep working without a connection. See
+// services/appDataStore.js for the cloud shape and the guarantees it gives
+// existing records (merge, never replace; upload only what is missing).
+const CLOUD_SYNC_FAILED = 'Cloud storage is unavailable — this entry is saved on THIS device only, and will be retried on reload.';
+
+/**
+ * Only a CONNECTION failure is "offline".
+ *
+ * A refused write (`permission-denied`) used to raise the same banner, which told the user
+ * their entry was local-only when the real problem was access — and left the misleading
+ * "Offline" indicator on screen while the app was perfectly online. The banner is now
+ * gated on the actual transport state; an access error is a different, accurate message.
+ */
+const ACCESS_DENIED = 'Your account is not allowed to save this entry to the cloud. Ask an administrator for access.';
+
+function syncErrorFor(error) {
+  const code = String(error?.code || '');
+  if (code === 'permission-denied' || code === 'unauthenticated') return ACCESS_DENIED;
+  return CLOUD_SYNC_FAILED;
+}
+
+function isConnectionError(error) {
+  const code = String(error?.code || '');
+  return code === 'unavailable' || code === 'deadline-exceeded' || code === 'network-request-failed';
+}
 
 export const DataContext = createContext(null);
 
@@ -47,6 +91,11 @@ const seed = {
   // the last ID above so the first new hire continues the sequence rather than
   // restarting at EMP-001 and colliding with the existing roster.
   'employee-sequence': [EMPLOYEE_DIRECTORY.length],
+  // The designations a user ADDED by hand on Line Deployment with the "+ Add"
+  // button. Empty by default — the preset grades come from the code list — and
+  // appended to as grades are added, so an added grade is selectable for the
+  // next person without having to be typed again.
+  'designation-options': [],
 
   // Production, attendance and payroll rows deliberately start EMPTY.
   //
@@ -108,6 +157,10 @@ const seed = {
   'leave-requests': [],
   salary: [],
   'hourly-timesheet-rows': [],
+  // Manual Line Output overrides, keyed by style + date. Empty by default: the
+  // line output is aggregated from operator entries until somebody deliberately
+  // overrides it (see the Line Output panel's confirmation dialog).
+  'line-output-overrides': [],
 };
 
 let nextId = 1000;
@@ -281,10 +334,26 @@ function summarize(action, key, entry) {
 
 export function DataProvider({ children }) {
   const [data, setData] = useState(loadData);
-  // Every write is logged so the bell page and History have something real to show.
+  // Set when the cloud could not be read/written. Screens surface it so an entry that
+  // only reached this device's cache is never mistaken for a permanent save.
+  const [cloudError, setCloudError] = useState('');
+  // The signed-in account gates the cloud: reading before sign-in would only be refused.
   const { user } = useAuth();
   const { record } = useActivity();
   const actor = user?.username || user?.email || 'Unknown user';
+  // The upload runs once per session, and only for the account that loaded the app.
+  const uploadedRef = useRef(false);
+  // Ids deleted in THIS session. A cloud snapshot can still carry a row whose delete
+  // has not propagated, and merging it back would make the row reappear on screen.
+  const deletedRef = useRef(new Map());
+  // The latest banner text, read by the retry timer below. `cloudError` itself is captured
+  // by the effect's closure and would stay '' forever.
+  const cloudErrorRef = useRef('');
+
+  const reportCloudError = (message) => {
+    cloudErrorRef.current = message || '';
+    setCloudError(message || '');
+  };
 
   // A readable one-liner travels with the notification (bell item + email) so neither has
   // to rebuild it from the raw entry.
@@ -294,43 +363,225 @@ export function DataProvider({ children }) {
     localStorage.setItem(DATA_KEY, JSON.stringify(data));
   }, [data]);
 
+  // ---- Cloud: upload what this browser has, then follow the shared store -------
+  useEffect(() => {
+    if (!user) return undefined;
+
+    let active = true;
+
+    // One-time setup of the cloud layout, in this order:
+    //   1. create the category folders (so `appData` reads as modules, not one flat pile)
+    //   2. copy every legacy flat row into its category
+    //   3. upload rows only this browser has
+    // All three are idempotent, so a reload (or a second device) simply finds nothing to do.
+    if (!uploadedRef.current) {
+      uploadedRef.current = true;
+      Promise.resolve()
+        .then(() => ensureCategories())
+        .then(() => migrateFlatCollections())
+        // The rows may have just MOVED into a category. The live subscription below picks
+        // them up on its own once the category folder appears, so nothing extra is needed
+        // here; the result is only worth a log line while the migration is new.
+        .then((migration) => {
+          if (migration?.moved) {
+            console.info(`[Data] Filed ${migration.moved} row(s) into ${migration.collections} category collection(s).`);
+          }
+          return null;
+        })
+        .catch(() => {});
+      uploadLocalStore(readLegacyStore())
+        .then((result) => {
+          if (!active) return;
+          if (result?.error) reportCloudError(CLOUD_SYNC_FAILED);
+          else if (result?.uploaded) reportCloudError('');
+        })
+        .catch((error) => { if (active) reportCloudError(syncErrorFor(error)); });
+    }
+
+    // Live follow: every collection the cloud holds is merged over the cache. A merge
+    // (not a replace) keeps a row a screen wrote while offline until it uploads.
+    const off = subscribeAll(
+      (collections) => {
+        if (!active) return;
+        // A snapshot that reached the client proves the server is answering: whatever
+        // "offline" state an earlier, transient failure set is now stale.
+        reportCloudError('');
+        setData((prev) => {
+          const next = { ...prev };
+          Object.entries(collections).forEach(([key, remoteRows]) => {
+            const gone = deletedRef.current.get(key);
+            const visible = gone ? remoteRows.filter((row) => !gone.has(String(row?.id))) : remoteRows;
+            next[key] = mergeRows(prev[key], visible);
+          });
+          return next;
+        });
+      },
+      (error) => {
+        if (!active) return;
+        // Access errors are not "offline": keep the connection indicator honest and
+        // let the write path report the refusal with its own message.
+        if (isConnectionError(error)) reportCloudError(CLOUD_SYNC_FAILED);
+      },
+    );
+
+    // Re-test the transport periodically while a banner is up, so the app returns to
+    // "online" by itself once the connection is restored — no reload needed.
+    const retryTimer = window.setInterval(() => {
+      if (!active || !cloudErrorRef.current) return;
+      probeFirestoreConnection(8000)
+        .then((online) => { if (active && online) reportCloudError(''); })
+        .catch(() => {});
+    }, 20000);
+
+    return () => { active = false; window.clearInterval(retryTimer); off(); };
+  }, [user]);
+
+  /**
+   * Writes a row to the cloud, if this is a cloud collection.
+   *
+   * Best-effort by design: the local state has already been updated, so a failed
+   * write must not throw into the screen's save handler and lose the entry.
+   */
+  function persistRow(key, row) {
+    if (NON_CLOUD_KEYS.has(key) || !row) return;
+    writeRow(key, row)
+      .then(() => reportCloudError(''))
+      .catch((error) => reportCloudError(syncErrorFor(error)));
+  }
+
   function getData(key) {
     return data[key] || [];
   }
 
+  /**
+   * Auto-sync: an hourly save is reflected in `daily-production` immediately.
+   *
+   * Hourly Production is the single-source-of-truth input form (the brief's
+   * "primary input source"). The Daily all-employee sheet, the Monthly matrix and
+   * the Overall Summary are all VIEWS of the same hourly rows, but a handful of
+   * existing screens (Production Report, Line Status, Target vs Actual) still read
+   * the legacy `daily-production` collection — so that collection has to be kept in
+   * step rather than left to rot.
+   *
+   * Rather than a second, parallel copy that can drift, this DERIVES the daily rows
+   * from the hourly rows with `aggregateDaily` and REPLACES the synced subset in
+   * one pass. Rows are marked `source: 'hourly'` so a hand-entered daily-production
+   * row is never touched: only the rows this sync owns are rewritten.
+   *
+   * It runs inside the same `setData` update as the hourly write, so a screen can
+   * never observe the two collections disagreeing — they change together or not at
+   * all. It is idempotent, so calling it after an edit or a delete simply produces
+   * the new truth.
+   */
+  function syncDailyFromHourly(prev, hourlyRows) {
+    const derived = aggregateDaily(hourlyRows).map((group) => ({
+      id: `hp-${group.key}`,
+      source: 'hourly',
+      date: group.date,
+      employee: group.employee,
+      process: group.process,
+      processes: [group.process],
+      style: group.style,
+      order_no: group.order_no,
+      line_no: group.line,
+      line: group.line,
+      quantity: group.good,
+      output: group.output,
+      defect_qty: group.defects,
+      hourlyTarget: group.target,
+      daily_target: group.dailyTarget,
+      target: group.dailyTarget,
+      working_hours: group.workingHours,
+      // Which kind of entry produced this daily line. Hourly, Daily and Total
+      // Line Output rows all land here (they share one stored shape); the QC
+      // Product Check deliberately does NOT, because it records inspection, not
+      // production, and counting it as output would inflate every figure.
+      entry_type: group.entry_type || 'hourly',
+      entryIds: group.entryIds,
+    }));
+    // Keep any daily-production row that was NOT written by this sync (a manual
+    // entry, or a row from another module such as Worker Production).
+    const manual = (prev['daily-production'] || []).filter((row) => row?.source !== 'hourly');
+    return [...manual, ...derived];
+  }
+
   function addEntry(key, entry) {
     const row = { id: ++nextId, ...entry };
-    setData((prev) => ({
-      ...prev,
-      [key]: [...(prev[key] || []), row],
-    }));
+    setData((prev) => {
+      const next = {
+        ...prev,
+        [key]: [...(prev[key] || []), row],
+      };
+      // The auto-sync: an hourly row appearing updates the daily sheet at once.
+      if (key === 'hourly-timesheet-rows') {
+        next['daily-production'] = syncDailyFromHourly(prev, next[key]);
+      }
+      return next;
+    });
     record('create', { key, entry: row, actor, summary: activitySummary('create', key, row), actionRequired: 'Review the new entry' });
+    persistRow(key, row);
     return row;
   }
 
   function updateEntry(key, id, updated) {
-    setData((prev) => ({
-      ...prev,
-      [key]: (prev[key] || []).map((row) => (row.id === id ? { ...row, ...updated } : row)),
-    }));
+    setData((prev) => {
+      const rows = (prev[key] || []).map((row) => (row.id === id ? { ...row, ...updated } : row));
+      const next = { ...prev, [key]: rows };
+      // Editing an hourly row re-derives the daily sheet, so a corrected hour is
+      // reflected in the Daily and Monthly views without a second save.
+      if (key === 'hourly-timesheet-rows') {
+        next['daily-production'] = syncDailyFromHourly(prev, rows);
+      }
+      return next;
+    });
     record('update', { key, entry: { ...updated, id }, actor, summary: activitySummary('update', key, updated), actionRequired: 'Confirm the change is correct' });
+    const existingRow = (data[key] || []).find((row) => row.id === id);
+    if (existingRow) persistRow(key, { ...existingRow, ...updated, id });
   }
 
   function deleteEntry(key, id) {
     const previous = (data[key] || []).find((row) => row.id === id) || { id };
-    setData((prev) => ({
-      ...prev,
-      [key]: (prev[key] || []).filter((row) => row.id !== id),
-    }));
+    setData((prev) => {
+      const rows = (prev[key] || []).filter((row) => row.id !== id);
+      const next = { ...prev, [key]: rows };
+      // Deleting an hourly row removes its contribution from the daily sheet.
+      if (key === 'hourly-timesheet-rows') {
+        next['daily-production'] = syncDailyFromHourly(prev, rows);
+      }
+      return next;
+    });
     record('delete', { key, entry: previous, actor, summary: activitySummary('delete', key, previous), actionRequired: 'Confirm the removal is intended' });
+    if (NON_CLOUD_KEYS.has(key)) return;
+    if (!deletedRef.current.has(key)) deletedRef.current.set(key, new Set());
+    deletedRef.current.get(key).add(String(id));
+    removeRow(key, id)
+      .then(() => reportCloudError(''))
+      .catch((error) => reportCloudError(syncErrorFor(error)));
   }
 
   function setRaw(key, value) {
-    setData((prev) => ({ ...prev, [key]: value }));
+    const previous = data[key] || [];
+    setData((prev) => {
+      const next = { ...prev, [key]: value };
+      // A bulk replace of the hourly collection (a CSV import, say) syncs too.
+      if (key === 'hourly-timesheet-rows') {
+        next['daily-production'] = syncDailyFromHourly(prev, value || []);
+      }
+      return next;
+    });
+    // A bulk write (a CSV import, a process list) also goes to the cloud. Only rows
+    // that are new or changed are sent, so a re-save of the same list is free.
+    if (NON_CLOUD_KEYS.has(key)) return;
+    const before = new Map((previous || []).map((row) => [String(row?.id), JSON.stringify(row)]));
+    const changed = (Array.isArray(value) ? value : []).filter((row) => {
+      if (!row || row.id === undefined || row.id === null) return false;
+      return before.get(String(row.id)) !== JSON.stringify(row);
+    });
+    changed.forEach((row) => persistRow(key, row));
   }
 
   return (
-    <DataContext.Provider value={{ getData, addEntry, updateEntry, deleteEntry, setRaw, summarize }}>
+    <DataContext.Provider value={{ getData, addEntry, updateEntry, deleteEntry, setRaw, summarize, cloudError }}>
       {children}
     </DataContext.Provider>
   );

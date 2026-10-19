@@ -1,34 +1,30 @@
 import { MODULE } from '../../../config/erpRoles';
-import { C } from '../../../config/erpSchema';
-import ErpModulePlaceholder from '../shared/ErpModulePlaceholder';
+import OrderInputPage from '../../OrderInputPage';
 
 /**
- * ROBIUL GARMENTS ERP — Order Input.
+ * ROBIUL GARMENTS ERP — Order Input (a tab of Order Management).
  *
- * The capture side of Order Management: raising a buyer order, its PO lines, and
- * uploading the process-breakdown sheet that tells the floor how the style is
- * built. It is the parent of Process Breakdown because a breakdown belongs to an
- * order — you cannot upload one before the order exists.
+ * This is the WORKING order-entry form, lifted out of the legacy sidebar menu
+ * and into the Order Management tab set.
  *
- * The order BOOK already reads correctly (see OrderManagement); this screen is
- * where those orders will be entered.
+ * Before the tabs existed, the ERP's "Order Input" was an ErpModulePlaceholder
+ * promising a form to come, while the real form lived under a separate legacy
+ * sidebar item of the same name — two entries called "Order Input", only one of
+ * which did anything. The tab now points at the real screen, so the app has
+ * exactly one order-entry form and no dead screen promising a second one.
+ *
+ * `OrderInputPage` owns its own data and permissions (it reads `order-model` and
+ * gates the form on the admin role) and renders a heading from its `item` prop,
+ * so both are supplied here. The page header above this already names the
+ * module and the active tab, which is why no extra ERP header is added.
  */
 export default function OrderInput() {
   return (
-    <ErpModulePlaceholder
-      icon="📝"
-      title="Order Input"
-      moduleLabel={MODULE.ORDERS}
-      collection={C.ORDERS}
-      description="Raise a buyer order, add its PO lines, and attach the process breakdown the floor works from."
-      note="Reading orders already works — open Order Management to see the live book. This screen adds the entry forms."
-      features={[
-        { label: 'New order form (buyer, order no, dates, quantities)', hint: 'Writes to the orders collection' },
-        { label: 'PO line entry (style, colour, size, qty, rate)', hint: 'One row per size/colour' },
-        { label: 'Process breakdown upload (.xlsx / .csv)', hint: 'Per-operation list with SMV and machine type' },
-        { label: 'Breakdown review before it reaches the floor', hint: 'Reject a bad sheet rather than publish it' },
-        { label: 'Duplicate order-no guard', hint: 'Enforced by a transaction on uniqueKeys' },
-      ]}
-    />
+    <div className="erp-tab-embed">
+      <OrderInputPage
+        category={{ key: MODULE.ORDERS, label: 'Order Management', icon: '📑' }}
+        item={{ key: 'order-input', label: 'Order Input', icon: '📝' }}
+      />
+    </div>
   );
 }

@@ -11,9 +11,11 @@ import { useAdminAccess } from '../context/AdminAccessContext';
 // (classic accordion — only one open at a time). Tapping a sub-item
 // navigates there and closes the drawer, so the page shows full-screen.
 //
-// An admin session only ever sees the two admin tools. Every production
-// module, the dashboard link and the salary group are omitted for them, so
-// there is nothing in the drawer to click outside the admin area.
+// The standard navigation is always rendered. An elevated (admin) account
+// additionally gets the Admin tools — Employee Management and User Approvals —
+// appended below it. The admin panels keep their own dedicated /admin/* routes,
+// so they never replace the Home/ERP Dashboard or the standard menu.
+
 export default function Sidebar({ defaultOpen = false }) {
   // `defaultOpen` renders the drawer already expanded. The app never passes it —
   // the ☰ button owns the state — but it lets a test (or a deep link) start from
@@ -34,7 +36,6 @@ export default function Sidebar({ defaultOpen = false }) {
   // Attendance, Sewing, Salary or anything else they are entitled to.
   const { elevated } = useAdminAccess();
   const showAdminTools = Boolean(elevated);
-
   // The drawer is only allowed to open once the role and the menu config are both
   // settled. Clicking before that would either render the wrong branch (general menu for
   // an admin) or navigate with a half-built path, and the user would have to refresh to
@@ -81,31 +82,52 @@ export default function Sidebar({ defaultOpen = false }) {
       {panelOpen && (
         <div className="drawer-backdrop" onClick={() => setPanelOpen(false)}>
           <aside className="drawer-panel" onClick={(e) => e.stopPropagation()}>
-            {showAdminTools ? (
-              /* Admin sees only the two admin tools — nothing else is rendered. */
-              <>
-                <button
-                  className={'sidebar-cat sidebar-cat-link' + (location.pathname.startsWith('/admin/workers') || location.pathname === '/employee-management' ? ' active' : '')}
-                  onClick={() => go('/admin/workers')}
-                >
-                  👥 Employee Management
-                </button>
-                <button
-                  className={'sidebar-cat sidebar-cat-link' + (location.pathname === '/admin/approvals' ? ' active' : '')}
-                  onClick={() => go('/admin/approvals')}
-                >
-                  🛡️ User Approvals
-                </button>
-              </>
-            ) : (
-              <>
-                <button className="sidebar-home drawer-dashboard" onClick={() => go('/')}>🏠 Dashboard</button>
+            <button className="sidebar-home drawer-dashboard" onClick={() => go('/')}>🏠 Dashboard</button>
 
-                {/* A category with no items is skipped rather than rendered as a group
-                    whose expand click would open an empty list. The path is built only
-                    from keys that are known to exist, so a click can never navigate to
-                    `/undefined/undefined` and land back on the Dashboard. */}
-                {categories.filter((cat) => Array.isArray(cat?.items) && cat.items.length > 0 && cat.key).map((cat) => (
+            {/* A category with no items is skipped rather than rendered as a group
+                whose expand click would open an empty list. The path is built only
+                from keys that are known to exist, so a click can never navigate to
+                `/undefined/undefined` and land back on the Dashboard. */}
+                {categories.filter((cat) => Array.isArray(cat?.items) && cat.items.length > 0 && cat.key).map((cat) => {
+              // A category that is only a wrapper around ONE item of the same
+              // name renders as a single direct link instead of a group.
+              //
+              // Order Management is exactly that: the category and its only item
+              // are both "Order Management". Drawn as a group it produced a
+              // collapsible "Order Management ▸" which opened to reveal a second
+              // "Order Management" underneath — a sub-menu that leads nowhere
+              // the parent did not already go. Collapsing it removes the
+              // duplicate and the pointless expansion click.
+              //
+              // The test is on the ITEM COUNT and the LABEL matching, not on the
+              // category key, so this generalises to any future single-item
+              // category: a genuine group (Sewing, Attendance, …) has several
+              // items or a differently-named child and is untouched.
+              const soloItem = cat.items.length === 1 && cat.items[0]?.key
+                && String(cat.items[0].label || '').trim() === String(cat.label || '').trim()
+                && childTargetsOf(cat.key, cat.items[0].key).length === 0
+                ? cat.items[0]
+                : null;
+
+              if (soloItem) {
+                const soloPath = modulePath(cat.key, soloItem.key);
+                const soloActive = location.pathname === soloPath
+                  || location.pathname.startsWith(`${soloPath}/`);
+                return (
+                  <div key={cat.key} className="sidebar-group">
+                    <button
+                      className={'sidebar-cat sidebar-cat-link' + (soloActive ? ' active' : '')}
+                      style={{ borderLeft: `3px solid ${cat.accent || '#334155'}` }}
+                      aria-current={soloActive ? 'page' : undefined}
+                      onClick={() => go(soloPath)}
+                    >
+                      <span>{cat.icon} {cat.label}</span>
+                    </button>
+                  </div>
+                );
+              }
+
+              return (
               <div key={cat.key} className="sidebar-group">
                 <button
                   className="sidebar-cat"
@@ -118,7 +140,7 @@ export default function Sidebar({ defaultOpen = false }) {
                 </button>
                 {openCat === cat.key && (
                   <div className="sidebar-items">
-                    {cat.items.filter((item) => item?.key).map((item) => {
+                    {cat.items.filter((item) => item?.key && !item.sidebarHidden).map((item) => {
                       // The path comes from the same helper App.jsx builds its routes with,
                       // so a drawer entry can never point at a URL the router does not have.
                       const path = modulePath(cat.key, item.key);
@@ -185,7 +207,8 @@ export default function Sidebar({ defaultOpen = false }) {
                   </div>
                 )}
               </div>
-                ))}
+              );
+                })}
 
             {/* ROBIUL GARMENTS ERP — additive. Renders nothing at all for a user
                 with no ERP role, so the legacy drawer is unchanged for them. It
@@ -223,7 +246,32 @@ export default function Sidebar({ defaultOpen = false }) {
                 </div>
               )}
             </div>
-              </>
+
+            {/* The Admin tools are appended AFTER the standard navigation, and only for an
+                elevated account. They point at their own dedicated `/admin/*` routes, so
+                opening the base URL or any production page never lands on them. */}
+            {showAdminTools && (
+              <div className="sidebar-group">
+                <div className="sidebar-cat" style={{ borderLeft: '3px solid #60a5fa' }}>
+                  <span>🔐 Admin</span>
+                </div>
+                <div className="sidebar-items">
+                  <button
+                    className={'sidebar-item' + (location.pathname.startsWith('/admin/workers') || location.pathname === '/employee-management' ? ' active' : '')}
+                    style={location.pathname.startsWith('/admin/workers') || location.pathname === '/employee-management' ? { color: '#60a5fa', background: '#60a5fa1a' } : undefined}
+                    onClick={() => go('/admin/workers')}
+                  >
+                    👥 Employee Management
+                  </button>
+                  <button
+                    className={'sidebar-item' + (location.pathname === '/admin/approvals' ? ' active' : '')}
+                    style={location.pathname === '/admin/approvals' ? { color: '#60a5fa', background: '#60a5fa1a' } : undefined}
+                    onClick={() => go('/admin/approvals')}
+                  >
+                    🛡️ User Approvals
+                  </button>
+                </div>
+              </div>
             )}
           </aside>
         </div>

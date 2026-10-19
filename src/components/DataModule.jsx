@@ -15,11 +15,15 @@ import EmployeeTargetChart from './EmployeeTargetChart';
 import LineStatusView from './LineStatusView';
 import HourlyTimesheet from './HourlyTimesheet';
 import FinishingPlanView from './FinishingPlanView';
-import DailyProductionModule from './DailyProductionModule';
+import DailyProductionTabs from './DailyProductionTabs';
+import OperatorPerformance from '../pages/erp/production/OperatorPerformance';
 import DailyProductionEntry from '../pages/DailyProductionEntry';
 import WorkerProductionPage from '../pages/WorkerProductionPage';
+import LineProductionPage from './LineProductionPage';
 import OrderInputPage from '../pages/OrderInputPage';
 import ProcessUploadPage from '../pages/ProcessUploadPage';
+import OrderManagementTabs from '../pages/OrderManagementTabs';
+import ManpowerManagementTabs from '../pages/ManpowerManagementTabs';
 import TnaCalendarPage from '../pages/TnaCalendarPage';
 import LineDeploymentPage from '../pages/LineDeploymentPage';
 import { ProductionReportView, CuttingReportView, FinishingReportView } from './ReportViews';
@@ -49,15 +53,22 @@ export default function DataModule({ category, item, parentItem }) {
 // `attendance-leave` carry `variant: 'table'` in the config (they describe the shape of a
 // row, not the screen), so a variant-first check rendered the plain generic table and the
 // dedicated Late / Leave pages were unreachable even though the route existed.
-// Daily Production carries the full Excel-template form (three sections),
-// its own summary table and the styled workbook export, so it is routed to a
-// dedicated screen instead of the generic field-driven table below.
-if (item.key === 'daily-production') return <DailyProductionModule category={category} item={item} />;
+// Daily Production is now the 3-tab aggregated view (Daily All-Employee sheet,
+// Monthly matrix, Overall Summary) plus an Hourly Entry tab that hosts the same
+// Hourly Production form — so the screen is a set of views of the hourly rows
+// rather than a second place to type the same day in.
+if (item.key === 'daily-production' || item.variant === 'daily-production-tabs') return <DailyProductionTabs />;
 // Worker Production is its own entry screen: a supervisor picks the employee and
 // operation, the target is derived from the uploaded sheet's SMV, and only the
 // actual output and defects are typed. It writes to `daily-production`, so a
 // worker entry appears in the Daily Production summary immediately.
 if (item.key === 'worker-production') return <WorkerProductionPage category={category} item={item} />;
+// Line Production: the day's line-by-line output, with Edit / Delete per row. A line
+// nobody submitted a Total Line Output entry for is filled in from the day's employee
+// entries, so the table is never empty while the floor recorded work.
+if (item.variant === 'line-production' || item.key === 'line-production') {
+  return <LineProductionPage />;
+}
 // The sidebar's nested "Daily Production Entry" link lands here: the same
 // three-section Hourly Production Tracking form, rendered as a full page
 // rather than a modal, so every hour box is directly tabbable.
@@ -67,9 +78,26 @@ if (item.variant === 'daily-production-entry') {
 // Order Management and TNA Management screens. Each is routed here by its own
 // variant, the same way every other bespoke screen in this file is, so the
 // sidebar entry and the screen stay in step through menuConfig alone.
+// Order Management is ONE screen with a tab bar, so its sidebar entry routes
+// here rather than to an accordion of three separate pages. The individual
+// `order-input` / `process-upload` branches below are kept so a bookmark or a
+// notification deep-link to one of the old URLs still opens the right screen
+// instead of falling through to the catch-all.
+if (item.variant === 'order-management-tabs') return <OrderManagementTabs />;
 if (item.variant === 'order-input') return <OrderInputPage category={category} item={item} />;
 if (item.variant === 'process-upload') return <ProcessUploadPage category={category} item={item} />;
 if (item.variant === 'tna-calendar') return <TnaCalendarPage category={category} item={item} />;
+// Manpower Management is ONE screen with a tab bar (Line Deployment /
+// Absenteeism), so its sidebar entry routes here rather than to an accordion of
+// two separate pages. The individual `line-deployment` / `manpower-absent`
+// branches below are kept so a bookmark or a notification deep-link to one of
+// the old URLs still opens the right screen instead of falling through to the
+// catch-all.
+if (item.variant === 'manpower-management-tabs'
+  || item.key === 'manpower-deployment'
+  || item.key === 'manpower-management') {
+  return <ManpowerManagementTabs />;
+}
 // The employee directory — a name in, a generated Employee ID out. Every other
 // employee dropdown in the app selects from the list it maintains.
 if (item.variant === 'line-deployment') return <LineDeploymentPage category={category} item={item} />;
@@ -90,6 +118,13 @@ if (item.key === 'daily-attendance') return <SmartAttendance />;
   if (item.variant === 'progress') return <ProgressView item={item} getData={getData} />;
   if (item.variant === 'present-absent') return <PresentAbsentView item={item} getData={getData} isAdmin={isAdmin} />;
   if (item.variant === 'monthly-matrix') return <MonthlyMatrixView item={item} />;
+  // Operator Performance is ONE screen with an in-page segmented switch (Operator
+  // Output / Efficiency %), so both old sub-menu entries now route here.
+  if (item.variant === 'operator-performance'
+    || item.key === 'operator-output'
+    || item.key === 'operator-efficiency') {
+    return <OperatorPerformance />;
+  }
   if (item.variant === 'report') return <ReportView item={item} getData={getData} isAdmin={isAdmin} />;
 
   // A general user is always read-only here, and a notification deep-link hides the

@@ -32,6 +32,187 @@ export const DIRECTORY_COLLECTION = 'employee-directory';
 export const EMPLOYEE_NAMES_KEY = 'employees';
 
 /**
+ * The designations a directory record may carry.
+ *
+ * A CLOSED list rather than free text, and that is the point: the rest of the app
+ * asks "is this person a supervisor?" to build the Total Line Output form's
+ * Supervisor Name dropdown (see `isSupervisor`). Free text made that question
+ * depend on how somebody happened to spell the word, so the same post was written
+ * "Supervisor", "line supervisor" and "Supervisor " — and a person whose spelling
+ * fell outside the pattern silently disappeared from the dropdown.
+ *
+ * A factory still needs to name a post this list does not carry, so the form offers
+ * an "Other / Custom Designation" route that types one in (see `CUSTOM_DESIGNATION`
+ * and `mergeDesignations`). A custom value is therefore allowed ON A RECORD while
+ * the LIST stays curated — which keeps the dropdown short without making an
+ * unusual post impossible to record.
+ */
+export const DESIGNATIONS = ['Operator', 'Incharge', 'Supervisor', 'Manager', 'QC'];
+
+/**
+ * The value the form's "custom" option carries.
+ *
+ * A sentinel rather than a real designation, so choosing it opens the text box
+ * instead of writing the words "Custom Designation" onto somebody's record. It
+ * starts with an underscore precisely so it can never collide with a grade a user
+ * types in.
+ */
+export const CUSTOM_DESIGNATION = '__custom__';
+
+/** The option label the form shows for the custom route. */
+export const CUSTOM_DESIGNATION_LABEL = 'Other / Custom Designation…';
+
+/**
+ * The collection the designations a user ADDED by hand are kept in.
+ *
+ * A designation created with the form's "+ Add" button has to survive on its own,
+ * before any employee carries it. `designationsInUse` reads the directory, which only
+ * knows a custom grade once a RECORD holds it — so a grade added from the dropdown and
+ * then not used would vanish on the next render. This store is what makes the addition
+ * persist for future selections, which is exactly what the brief asks for.
+ */
+export const DESIGNATION_OPTIONS_KEY = 'designation-options';
+
+/**
+ * A typed designation, cleaned for storage: trimmed and inner-whitespace collapsed.
+ * Returns '' for anything that is not a usable value, so a caller can treat empty as
+ * "nothing was typed" without a second check.
+ */
+export function cleanDesignation(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * The custom designations the user has added by hand, in the order they were added.
+ * Tolerates a missing or malformed store rather than throwing.
+ */
+export function storedDesignations(options = []) {
+  return (Array.isArray(options) ? options : [])
+    .map(cleanDesignation)
+    .filter(Boolean);
+}
+
+/**
+ * The designation list to OFFER, merged from BOTH sources.
+ *
+ *   preset grades (DESIGNATIONS)
+ *   → the custom values already on a directory record  (designationsInUse)
+ *   → the custom values ADDED by hand                   (storedDesignations)
+ *
+ * De-duplicated case-insensitively and kept in that order, so the presets stay put and
+ * a newly added grade appears at the end of the list where it was just typed.
+ *
+ * @param {Array} directory  the stored records
+ * @param {Array} stored     the `designation-options` store
+ * @returns {string[]} every value the dropdown should carry
+ */
+export function designationOptionsFor(directory = [], stored = []) {
+  const base = designationsInUse(directory);
+  const seen = new Set(base.map((d) => d.toLowerCase()));
+  const extras = [];
+  storedDesignations(stored).forEach((value) => {
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    extras.push(value);
+  });
+  return [...base, ...extras];
+}
+
+/**
+ * The `designation-options` store after adding `value`, or `null` when the value is
+ * not worth adding.
+ *
+ * Returns the SAME array reference semantics the caller expects: `null` means "leave the
+ * store alone". A blank value, or one that is already on the merged list (case-
+ * insensitively), adds nothing — the caller selects the existing spelling instead.
+ *
+ * @param {Array}  stored  the current store
+ * @param {string} value   the typed designation
+ * @param {Array}  merged  the merged options list the dropdown is showing
+ * @returns {Array|null} the next store, or null when nothing should be written
+ */
+export function addDesignationOption(stored = [], value, merged = []) {
+  const clean = cleanDesignation(value);
+  if (!clean) return null;
+  const existing = (merged || []).find((d) => String(d).toLowerCase() === clean.toLowerCase());
+  if (existing) return null;
+  if (storedDesignations(stored).some((d) => d.toLowerCase() === clean.toLowerCase())) return null;
+  return [...storedDesignations(stored), clean];
+}
+
+/**
+ * The option spelling a typed value should SELECT: the list's own spelling when the value
+ * is already carried (any case), otherwise the cleaned value as typed.
+ *
+ * Keeps the dropdown on a single canonical spelling, so adding "operator" selects the
+ * existing "Operator" rather than creating a second, differently-cased option.
+ */
+export function matchingDesignation(merged = [], value) {
+  const clean = cleanDesignation(value);
+  if (!clean) return '';
+  return (merged || []).find((d) => String(d).toLowerCase() === clean.toLowerCase()) || clean;
+}
+
+/** The designation a record with none is shown as, in the table and the dropdown. */
+export const DESIGNATION_NONE = '\u2014';
+
+/**
+ * The designation a record with none is STORED with.
+ *
+ * The brief: an existing employee's blank designation defaults to Operator rather
+ * than staying empty. Operator is the honest default — it is the grade most of the
+ * floor holds — and it is better than a blank, which silently removed the person
+ * from any list that filters on designation.
+ */
+export const DEFAULT_DESIGNATION = 'Operator';
+
+/**
+ * The designation a stored record carries, normalised to the list above.
+ *
+ * A record written before this list existed (or by the admin Employee Management
+ * screen, which still takes free text) may hold any spelling. A case-insensitive
+ * match against the list is used, so "operator" reads as "Operator"; anything else
+ * is returned as it was stored rather than being silently rewritten to a value
+ * somebody did not choose.
+ *
+ * A record with NO designation at all returns the default (Operator) rather than an
+ * empty string — see DEFAULT_DESIGNATION.
+ */
+export function normalizeDesignation(value) {
+  const clean = String(value || '').trim();
+  if (!clean) return DEFAULT_DESIGNATION;
+  const match = DESIGNATIONS.find((d) => d.toLowerCase() === clean.toLowerCase());
+  return match || clean;
+}
+
+/**
+ * The designation list to OFFER, including any custom values already in use.
+ *
+ * A custom designation is not a one-off: once somebody is recorded as a "Trainer",
+ * the next person in that post has to be selectable too, or the dropdown forces the
+ * same value to be retyped (and mis-typed) every time. So the preset list is
+ * extended with the custom values the directory already holds, in the order they
+ * were first seen, de-duplicated case-insensitively.
+ *
+ * @param {Array} directory the stored records
+ * @returns {string[]} the preset grades followed by the custom ones in use
+ */
+export function designationsInUse(directory = []) {
+  const seen = new Set(DESIGNATIONS.map((d) => d.toLowerCase()));
+  const extras = [];
+  directoryList(directory).forEach((record) => {
+    const value = String(record.designation || '').trim();
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    extras.push(value);
+  });
+  return [...DESIGNATIONS, ...extras];
+}
+
+/**
  * Smart Attendance's own store — the `workers` collection it seeds and keys
  * attendance rows on.
  *
@@ -171,7 +352,16 @@ export function normalizeEmployee(record, index = 0) {
   if (!record) return null;
   // A bare string is a name from the legacy list — accepted, and given an id.
   if (typeof record === 'string') {
-    return { id: `name-${index}`, employeeId: '', name: record, status: STATUS.ACTIVE, active: true };
+    return {
+      id: `name-${index}`,
+      employeeId: '',
+      name: record,
+      // A legacy name carries no grade, so it takes the default — the brief asks
+      // for existing employees to read as Operator rather than sitting blank.
+      designation: DEFAULT_DESIGNATION,
+      status: STATUS.ACTIVE,
+      active: true,
+    };
   }
   const name = String(record.name || record.fullName || '').trim();
   if (!name) return null;
@@ -188,6 +378,9 @@ export function normalizeEmployee(record, index = 0) {
     // attendance row. Derived so the two collections agree without a lookup.
     workerId: record.workerId ?? employeeIdNumber(record.employeeId),
     name,
+    // The person's grade. Normalised to the closed list when it matches one, so
+    // every reader can compare against a known value instead of a spelling.
+    designation: normalizeDesignation(record.designation),
     status,
     archived,
     active: status === STATUS.ACTIVE,
@@ -233,19 +426,98 @@ export function findByName(records = [], name) {
 }
 
 /**
- * The record produced when a name is submitted: a fresh sequential Employee ID
- * and the name, and nothing else — the form only collects a name by design.
+ * The record produced when the form is submitted.
+ *
+ * @param {string} name        the person's full name
+ * @param {Array}  existing    the current directory, for the next free Employee ID
+ * @param {string} createdAt   the date the record was created
+ * @param {number} highWaterMark the stored ID sequence
+ * @param {string} designation the grade chosen in the form (see DESIGNATIONS), or a
+ *                             custom value typed into the form's text box
  */
-export function buildEmployeeRecord(name, existing = [], createdAt, highWaterMark = 0) {
+export function buildEmployeeRecord(name, existing = [], createdAt, highWaterMark = 0, designation = '') {
   const clean = String(name || '').trim().replace(/\s+/g, ' ');
   if (!clean) throw new Error('A full name is required.');
   return {
     id: `emp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     employeeId: nextEmployeeId(existing, highWaterMark),
     name: clean,
+    // A blank falls back to the default rather than being stored empty, so a
+    // record can never be left without a grade to filter on.
+    designation: normalizeDesignation(designation || DEFAULT_DESIGNATION),
     createdAt: createdAt || new Date().toISOString().slice(0, 10),
     active: true,
   };
+}
+
+/**
+ * The validation errors for the add-employee form, as one field -> message map.
+ *
+ * Field-level rather than a single form-level message, because the brief asks for
+ * the error to sit UNDER the box that is wrong: a top banner makes the reader hunt
+ * for which field it means, and with two fields on this form there is no reason to
+ * make them.
+ *
+ * @param {object} form        { name, designation, customDesignation }
+ * @param {Array}  existing    the current directory
+ * @param {object} options     { designationOptions } — the list actually offered
+ * @returns {Record<string,string>} empty when the form is valid
+ */
+export function validateEmployee(form = {}, existing = [], { designationOptions = DESIGNATIONS } = {}) {
+  const errors = {};
+  const clean = String(form.name || '').trim().replace(/\s+/g, ' ');
+  if (!clean) {
+    errors.name = 'Enter the employee\u2019s full name.';
+  } else {
+    const clash = findByName(existing, clean);
+    if (clash) {
+      errors.name = `\u201c${clash.name}\u201d is already in the directory as ${clash.employeeId}. `
+        + 'Employee names must be unique \u2014 edit that record instead of adding it again.';
+    }
+  }
+
+  // A custom designation is typed rather than chosen, so the two cases are checked
+  // separately: the dropdown must carry a selection, and a typed value must not be
+  // empty or a duplicate of a grade already on the list.
+  if (form.designation === CUSTOM_DESIGNATION) {
+    const typed = String(form.customDesignation || '').trim().replace(/\s+/g, ' ');
+    if (!typed) {
+      errors.customDesignation = 'Type the new designation.';
+    } else if (designationOptions.some((d) => d.toLowerCase() === typed.toLowerCase())) {
+      errors.customDesignation = `\u201c${typed}\u201d is already on the list \u2014 choose it from the dropdown.`;
+    }
+  } else if (!String(form.designation || '').trim()) {
+    errors.designation = 'Choose the employee\u2019s designation.';
+  }
+
+  return errors;
+}
+
+/**
+ * The designation a form submission should actually store.
+ *
+ * Resolves the custom route: the sentinel means "use the typed value", anything
+ * else is the chosen grade. Kept here so the form and its tests agree on what the
+ * sentinel means rather than each re-implementing the branch.
+ */
+export function resolveDesignation(form = {}) {
+  if (form.designation === CUSTOM_DESIGNATION) return String(form.customDesignation || '').trim();
+  return String(form.designation || '').trim();
+}
+
+/**
+ * The directory with a designation applied to one record.
+ *
+ * The rename path already replaces a record in place so its Employee ID survives;
+ * this is the same idea for the grade, so changing somebody from Operator to
+ * Supervisor cannot touch the ID that attendance and payroll reference.
+ */
+export function withDesignation(directory = [], id, designation) {
+  return (Array.isArray(directory) ? directory : []).map((record) => (
+    record && String(record.id) === String(id)
+      ? { ...record, designation: normalizeDesignation(designation) }
+      : record
+  ));
 }
 
 /**
@@ -414,4 +686,78 @@ export function workersToSync(nextDirectory = []) {
       active: isSelectable(record),
     }))
     .filter(Boolean);
+}
+
+// ---- Supervisors -------------------------------------------------------------
+
+/**
+ * True when a person's designation is "Supervisor" — and only that.
+ *
+ * The Total Line Output form asks WHO was in charge of the line, so it must offer
+ * supervisors and nobody else. The designation is free text on both the directory
+ * and the ERP employee master, so the match is on the normalised words rather than
+ * on an exact string: "Supervisor", "supervisor", "Line Supervisor" and
+ * "Sr. Supervisor" all count, while "Operator" and "Sewing Supervisor Trainee"
+ * spellings that merely CONTAIN the word as part of a longer post still count as
+ * supervisors — which is the intent, because a line supervisor is who the field asks
+ * for.
+ *
+ * A bare role is accepted too (`role: 'supervisor'`), for a record created on the
+ * admin Employee Management screen, which stores `designation` and `role`
+ * separately. Nothing else is inferred: an operator is never promoted to supervisor
+ * because their `role` happens to read loosely.
+ */
+export function isSupervisor(record) {
+  if (!record) return false;
+  const candidates = [record.designation, record.designationName, record.role, record.jobTitle];
+  return candidates.some((value) => {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return false;
+    // A single word (or a phrase ending in it) — never a substring of another word.
+    return /\bsupervisor\b/.test(text) || /\bline\s*in-?charge\b/.test(text);
+  });
+}
+
+/**
+ * The supervisor names a dropdown offers.
+ *
+ * Reads BOTH rosters, because a factory enters people in either place and the
+ * brief names Manpower Management / Line Deployment:
+ *
+ *   `employee-directory`  the Line Deployment master (status-aware)
+ *   `employees`           the plain name list, an array of strings
+ *
+ * Only ACTIVE records are offered, and only those whose designation is a
+ * supervisor. A name that exists only as a legacy string carries no designation, so
+ * it is deliberately NOT included: offering it would be guessing that a worker is a
+ * supervisor, and the field would then be filled by whoever came first rather than
+ * by the person in charge.
+ */
+export function supervisorNames(directory = [], employeeNamesList = []) {
+  const seen = new Set();
+  const names = [];
+  const add = (name) => {
+    const clean = String(name || '').trim();
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) return;
+    seen.add(key);
+    names.push(clean);
+  };
+
+  directoryList(directory).forEach((record) => {
+    if (!isSelectable(record)) return;
+    if (!isSupervisor(record)) return;
+    add(record.name);
+  });
+
+  // The name list holds strings only; when a supervisor record exists for the name
+  // it has already been added above, so this only ever contributes nothing new
+  // unless the two sources genuinely disagree.
+  (Array.isArray(employeeNamesList) ? employeeNamesList : []).forEach((entry) => {
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && isSupervisor(entry)) {
+      add(entry.name);
+    }
+  });
+
+  return names.sort((a, b) => a.localeCompare(b));
 }

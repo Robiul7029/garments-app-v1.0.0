@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
+import { useErpData } from '../../../context/ErpDataContext';
+import { usePermissions } from '../../../context/PermissionContext';
 import { MODULE } from '../../../config/erpRoles';
-import { ORDER_STATUS } from '../../../config/erpSchema';
+import { C, ORDER_STATUS } from '../../../config/erpSchema';
 import { LoadingState, ErrorState, EmptyState, StatusBadge, StatCard } from '../../../components/erp/Primitives';
 import { DonutChartCard, RankedBarCard, formatNumber } from '../../../components/erp/Charts';
 import { formatShort } from '../../../utils/erpDashboard';
@@ -29,6 +31,18 @@ export default function OrderManagement() {
   const today = useToday();
   const { loading, error } = useErpSources();
   const data = useErpOverview(today);
+  const erp = useErpData();
+  // Role-based UI trigger: the per-row "Manual status" control is an EDIT, so it
+  // is only offered to a role that holds the edit action on Order Management. A
+  // View-Only general user gets the full order table and the KPI/chart summary
+  // without that column — read access is unchanged.
+  const permissions = usePermissions();
+  const canManageOrders = permissions.canEdit(MODULE.ORDERS);
+
+  async function updateOrderStatus(row, status) {
+    const result = await erp.save(C.PURCHASE_ORDERS, { status, manualStatusOverride: true }, { id: row.id, module: MODULE.ORDERS });
+    if (!result.ok) window.alert(result.error || 'Could not update the order status.');
+  }
 
   if (loading && data.orderRows.length === 0) {
     return <LoadingState label="Loading purchase orders…" rows={4} />;
@@ -53,7 +67,7 @@ export default function OrderManagement() {
 
       <OrderKpis stats={data.orderStats} />
       <OrderCharts data={data} />
-      <OrderTable rows={data.orderRows} />
+      <OrderTable rows={data.orderRows} canManageOrders={canManageOrders} onStatusChange={updateOrderStatus} />
     </div>
   );
 }
@@ -131,7 +145,7 @@ function OrderCharts({ data }) {
 }
 
 /** ---- 3. the order table ---- */
-function OrderTable({ rows }) {
+function OrderTable({ rows, canManageOrders, onStatusChange }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [showAll, setShowAll] = useState(false);
 
@@ -199,6 +213,7 @@ function OrderTable({ rows }) {
                       <th align="right">Balance</th>
                       <th>Progress</th>
                       <th>Status</th>
+                      {canManageOrders && <th>Manual status</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -217,8 +232,8 @@ function OrderTable({ rows }) {
                           )}
                         </td>
                         <td align="right" className="erp-mono">{formatNumber(row.total)}</td>
-                        <td align="right" className="erp-mono">{formatNumber(row.shipped)}</td>
-                        <td align="right" className="erp-mono">{formatNumber(Math.max(0, row.total - row.shipped))}</td>
+                        <td align="right" className="erp-mono">{formatNumber(Math.max(row.shipped, row.produced || 0))}</td>
+                        <td align="right" className="erp-mono">{formatNumber(Math.max(0, row.total - Math.max(row.shipped, row.produced || 0)))}</td>
                         <td>
                           <span className="erp-progress" role="img" aria-label={`${row.progress}% shipped`}>
                             <span className="erp-progress-track">
@@ -230,7 +245,17 @@ function OrderTable({ rows }) {
                             <span className="erp-progress-text erp-mono">{row.progress}%</span>
                           </span>
                         </td>
-                        <td><StatusBadge status={row.status || ORDER_STATUS.NEW} /></td>
+                        <td>
+                          <StatusBadge status={row.status || ORDER_STATUS.NEW} />
+                          {row.autoStatus && <span className="erp-cell-note">Automatically {row.autoStatus === ORDER_STATUS.COMPLETED ? 'completed' : 'closed'} from delivery date or fulfillment</span>}
+                        </td>
+                        {canManageOrders && (
+                          <td>
+                            <select className="erp-select" aria-label={`Manually update status for ${row.poNo}`} value={row.rawStatus || row.status} onChange={(event) => onStatusChange(row, event.target.value)}>
+                              {[ORDER_STATUS.NEW, ORDER_STATUS.CONFIRMED, ORDER_STATUS.PRODUCTION, ORDER_STATUS.PARTIALLY_COMPLETED, ORDER_STATUS.READY_TO_SHIP, ORDER_STATUS.SHIPPED, ORDER_STATUS.COMPLETED, ORDER_STATUS.INACTIVE, ORDER_STATUS.CLOSED, ORDER_STATUS.ARCHIVED, ORDER_STATUS.CANCELLED].map((status) => <option key={status} value={status}>{status}</option>)}
+                            </select>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

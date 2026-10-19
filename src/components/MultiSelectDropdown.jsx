@@ -10,8 +10,10 @@ import { splitValues, joinValues } from '../config/orderWorkflow';
  * `<select multiple>` is unusable on a factory tablet (ctrl-click to pick two).
  *
  * This control is the one shape that fits both:
- *   - a closed box that shows what is selected, with a counter badge beside it
+ *   - a closed box that shows the first two values, then a "+N more" badge, so
+ *     the box is a FIXED height however many values are chosen
  *   - a dropdown of CHECKBOXES so tapping toggles a value without losing the list
+ *   - a counter badge beside the field, live with the number selected
  *   - a search box that filters as you type
  *   - a free-text row so a colour or size the list does not carry can still be
  *     added, which is what keeps the control from ever blocking a real order
@@ -29,6 +31,11 @@ export default function MultiSelectDropdown({
   id,
   ariaLabel,
   disabled = false,
+  // How many chips the closed box shows before collapsing the rest into a
+  // "+N more" badge. Fixed at 2 on Order Input, where the box must never wrap
+  // to a second line: Colour and Size Range sit side by side in one grid row,
+  // and a box that grew with the selection would break that row's height.
+  maxVisibleTags = 2,
   // Styling hook so each field keeps its own tint (colour vs size).
   className = '',
   optionTone = '',
@@ -39,6 +46,13 @@ export default function MultiSelectDropdown({
   const boxRef = useRef(null);
 
   const selected = useMemo(() => splitValues(value), [value]);
+  // The chips the closed box actually renders, and the remainder that collapses
+  // into the overflow badge. Recomputed on every toggle, so unticking an option
+  // in the menu updates the tags immediately without a re-render of anything
+  // else. `hiddenCount` is never negative, so a single selection shows its own
+  // chip alone and no badge.
+  const visibleTags = useMemo(() => selected.slice(0, maxVisibleTags), [selected, maxVisibleTags]);
+  const hiddenCount = Math.max(0, selected.length - maxVisibleTags);
 
   // The checkbox list is the standard options plus any selected value the list
   // does not carry, so a custom entry stays visible and removable rather than
@@ -118,9 +132,13 @@ export default function MultiSelectDropdown({
         aria-expanded={open}
         aria-label={ariaLabel}
       >
+        {/* At most `maxVisibleTags` tags are shown; the rest collapse into the
+            "+N more" badge. That is what keeps the box a FIXED height however
+            many values an order carries — 2 colours and 12 colours occupy the
+            same single line. */}
         <span className="msd-values">
           {selected.length === 0 && <span className="msd-placeholder">{placeholder}</span>}
-          {selected.map((item) => (
+          {visibleTags.map((item) => (
             <span className={`msd-chip ${optionTone}`.trim()} key={item}>
               <span className="msd-chip-label">{item}</span>
               {!disabled && (
@@ -136,13 +154,26 @@ export default function MultiSelectDropdown({
               )}
             </span>
           ))}
+          {hiddenCount > 0 && (
+            <span
+              className="msd-more"
+              title={`${hiddenCount} more selected`}
+            >{`+${hiddenCount} more`}</span>
+          )}
         </span>
         <span className="msd-caret" aria-hidden="true">▾</span>
       </button>
 
-      {/* The counter box: the exact number selected, always visible next to the
-          field so an under-filled order is obvious before it is saved. */}
-      <span className="msd-counter" title={`${selected.length} selected`} aria-hidden="true">
+      {/* The counter badge: the exact number selected, always visible next to
+          the field so an under-filled order is obvious before it is saved. It
+          reads `selected.length` directly, so the number moves the instant a
+          checkbox is ticked or unticked in the menu. `aria-live` so the change
+          is announced too, rather than being a purely visual cue. */}
+      <span
+        className={`msd-counter${selected.length > 0 ? ' msd-counter-on' : ''}`}
+        title={`${selected.length} selected`}
+        aria-live="polite"
+      >
         {selected.length}
       </span>
 

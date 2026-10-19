@@ -18,6 +18,9 @@
  * localStorage row that knows nothing about hours still reads and writes fine.
  */
 
+import { splitValues } from './orderWorkflow';
+import { dailyTargetFrom, PRODUCTIVE_SHIFT_HOURS } from './workingHours';
+
 // ---- Section 2: the hourly grid -------------------------------------------
 // Ten one-hour slots, 08:00 → 18:00, exactly as the template prints them.
 export const HOUR_SLOTS = [
@@ -84,7 +87,22 @@ export const ORDER_DETAIL_FIELDS = [
   { name: 'employee', label: 'Line / Employee', type: 'employee-select', legacy: true },
   { name: 'working_hours', label: 'Working Hours', type: 'number', autoNote: true },
   { name: 'manpower', label: 'Manpower', type: 'number' },
-  { name: 'daily_target', label: 'Daily Target', type: 'number', autoNote: true },
+  // Daily Target is DERIVED — with several processes it is the sum of their own
+  // targets, which are set in the per-process boxes. Marked `computed` so it is
+  // not `required`: an empty box here is a normal state mid-entry, and making it
+  // required would block the save on a field the supervisor is not meant to type.
+  { name: 'daily_target', label: 'Daily Target', type: 'number', autoNote: true, computed: true },
+];
+
+/** Common colours, offered as one-tap suggestions on the Daily Production form. */
+export const COLOR_SUGGESTIONS = [
+  'Navy', 'Black', 'White', 'Red', 'Grey Melange', 'Charcoal',
+  'Maroon', 'Olive', 'Beige', 'Sky Blue', 'Bottle Green', 'Mustard',
+];
+
+/** The standard size ladder, offered as one-tap suggestions. */
+export const SIZE_PRESETS = [
+  'XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL', '6XL',
 ];
 
 /** Section 1's heading on the form and in the export. */
@@ -210,8 +228,49 @@ export function buildDailyProductionRecord(form) {
   const quantity = summary.actualOutput
     ? summary.goodOutput
     : numeric(form && form.quantity);
+
+  // The chosen processes and their own targets. `process` keeps the FIRST one so
+  // every existing reader (the grouped table, the export, Line Status) still finds
+  // a single operation on the row, while `processes` / `process_targets` carry the
+  // full multi-process picture for the screens that want it.
+  const processes = splitValues(form && (form.processes ?? form.process));
+  const processTargets = (form && form.process_targets) || {};
+  // The day's target is the SUM of the per-process targets when they are set — the
+  // entry covers several operations, so measuring it against only the first would
+  // understate what the line was asked to make.
+  const targetSum = processes.reduce(
+    (sum, name) => sum + numeric(processTargets[name]),
+    0,
+  );
+
+  // The per-process sum IS the day's target, so it is written to BOTH the legacy
+  // `daily_target` and `target` keys rather than being left empty. `daily_target`
+  // is displayed as a derived read-out on the form, so it arrives here blank; a
+  // caller that set it explicitly still wins.
+  //
+  // A MANUAL hourly target overrides all of that: the brief's rule is that the
+  // day's target is the hourly target multiplied by the active working hours
+  // (lunch excluded), so the Hourly and Daily modules are showing the same figure
+  // derived the same way.
+  const hourlyTarget = numeric(form && form.hourly_target);
+  const workingHours = numeric(form && form.working_hours) || PRODUCTIVE_SHIFT_HOURS;
+  const manualDailyTarget = hourlyTarget > 0 ? dailyTargetFrom(hourlyTarget, workingHours) : 0;
+
+  const dailyTarget = manualDailyTarget > 0
+    ? manualDailyTarget
+    : (targetSum > 0
+      ? (numeric(form.daily_target) || targetSum)
+      : numeric(form.daily_target) || numeric(form.target));
+
   return {
     ...form,
+    process: processes[0] || form.process || '',
+    processes,
+    process_targets: processTargets,
+    hourly_target: hourlyTarget,
+    working_hours: workingHours,
+    daily_target: dailyTarget,
+    target: dailyTarget,
     quantity,
     hourly: form.hourly || {},
     summary: {
@@ -221,7 +280,7 @@ export function buildDailyProductionRecord(form) {
       goodOutput: summary.goodOutput,
       outputToFinishing: summary.outputToFinishing,
       variance: summary.variance,
-      dailyTarget: summary.dailyTarget,
+      dailyTarget,
       actual: summary.actualOutput,
     },
   };

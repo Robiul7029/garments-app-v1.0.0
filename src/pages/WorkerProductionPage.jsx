@@ -54,6 +54,10 @@ export default function WorkerProductionPage({ item, category }) {
   const orders = getData(COLLECTIONS.ORDERS);
   const processSheets = getData(COLLECTIONS.PROCESS_SHEETS);
   const capacityRecords = getData(CAPACITY_COLLECTION);
+  // The hourly shift sheet, written by the Hourly Production screen. Its rows are
+  // summed per employee below so this page shows the same day totals that screen
+  // does — one collection, two views.
+  const hourlyRows = getData('hourly-timesheet-rows');
 
   const todayKey = new Date().toISOString().slice(0, 10);
 
@@ -133,6 +137,27 @@ export default function WorkerProductionPage({ item, category }) {
 
   // Live variance for what has been typed so far.
   const live = achievementVsTarget(entry.quantity, derived.target);
+
+  /**
+   * Daily totals from the HOURLY sheet, per employee, for the entry's date.
+   *
+   * Every hour box of every row is summed, and rows for the same person are
+   * added together, so the figure shown here is the same one the Hourly
+   * Production screen prints for that worker and day.
+   */
+  const hourlyTotals = useMemo(() => {
+    const byEmployee = new Map();
+    hourlyRows
+      .filter((r) => String(r.date || '').slice(0, 10) === String(entry.date || '').slice(0, 10))
+      .forEach((r) => {
+        const key = r.employee || '(unnamed)';
+        const total = Object.values(r.hours || {}).reduce((sum, v) => sum + (Number(v) || 0), 0);
+        byEmployee.set(key, (byEmployee.get(key) || 0) + total);
+      });
+    return [...byEmployee.entries()]
+      .map(([employee, total]) => ({ employee, total }))
+      .sort((a, b) => b.total - a.total);
+  }, [hourlyRows, entry.date]);
 
   function set(field, value) {
     setEntry((prev) => ({ ...prev, [field]: value }));
@@ -348,6 +373,34 @@ export default function WorkerProductionPage({ item, category }) {
           <span>View only — your role can read worker production but not change it.</span>
         </div>
       )}
+
+      {/* ---- Daily totals from the hourly sheet ----
+          The Hourly Production screen sums every hour box per worker. Those same
+          totals appear here, so a supervisor on the Worker Production page sees
+          what each operator produced across the day without opening the other tab. */}
+      <section className="hourly-totals" style={{ marginTop: 22 }}>
+        <h3 className="dp-recent-title">
+          Hourly daily totals
+          <span className="rge-card-sub" style={{ marginLeft: 10 }}>
+            {entry.date} · summed from the Hourly Production sheet
+          </span>
+        </h3>
+        {hourlyTotals.length === 0 ? (
+          <p className="hint" style={{ marginTop: 8 }}>
+            No hourly entries recorded for {entry.date} yet.
+          </p>
+        ) : (
+          <div className="hourly-total-chips">
+            {hourlyTotals.map((t) => (
+              <div key={t.employee} className="hourly-total-chip">
+                <span className="hourly-total-name">{t.employee}</span>
+                <span className="hourly-total-value">{t.total.toLocaleString()} pcs</span>
+                <span className="hourly-total-sub">Daily total</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* The grouped table: the employee once, every process they worked beneath. */}
       <section className="dp-recent" style={{ marginTop: 22 }}>

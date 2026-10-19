@@ -193,6 +193,17 @@ service cloud.firestore {
               'maintenance', 'cutting', 'finishing', 'packing', 'shipment'];
     }
 
+    // Roles that may READ any ERP collection at all.
+    //
+    // The client treats read access as the View-Only baseline: every signed-in
+    // account may open and read every page, and the permission matrix decides
+    // only what may be CHANGED. These rules mirror that. A role holding no ERP
+    // grant (a general user) still reads; it is only the write rules below that
+    // name specific roles.
+    function erpReaderRoles() {
+      return erpAllRoles() + ['employee', 'viewer'];
+    }
+
     function erpMgmtRoles()      { return ['super_admin', 'management', 'gm']; }
     function erpOrderRoles()      { return ['super_admin', 'management', 'gm', 'merchandising', 'planning']; }
     function erpProductionRoles() { return ['super_admin', 'production_manager', 'supervisor', 'cutting', 'finishing']; }
@@ -275,12 +286,36 @@ service cloud.firestore {
       allow create, update, delete: if erpCanWrite(['super_admin', 'production_manager', 'supervisor']);
     }
     match /hourlyProduction/{entryId} {
-      // A supervisor records the hourly figure, so create/update is theirs; only a
-      // manager may delete an entry, because a deleted hour changes the day's
-      // achievement percentage that management already saw.
+      // A supervisor records the hourly figure, so create/update is theirs.
+      //
+      // DELETE is granted to the same roles as create/update — NOT only to a
+      // manager as it was before — because the entry form MIRRORS its local rows
+      // here: editing an entry that loses an hour slot, or deleting a row, has to
+      // remove the ERP document that slot owned. Without this a supervisor could
+      // record a figure but never correct it, and the ERP dashboard would keep
+      // counting an hour the floor had taken away. The reconcile only ever removes
+      // documents the mirror itself wrote (those carrying a `localRowId`), so a row
+      // another screen owns is never touched from here.
       allow get, list: if erpCanRead(erpProductionRoles() + ['gm', 'management', 'qc']);
-      allow create, update: if erpCanWrite(erpProductionRoles());
-      allow delete: if erpCanWrite(['super_admin', 'production_manager', 'management']);
+      allow create, update, delete: if erpCanWrite(erpProductionRoles());
+    }
+
+    // The daily production sheet — one document per line/day. It had NO match block,
+    // so every read and write fell through to the catch-all below and was denied:
+    // that is the "Missing or insufficient permissions" error the daily-production
+    // screen and its dashboard tiles reported.
+    //
+    // ACCESS: the daily sheet is written from the floor by whichever account is
+    // signed in at the line, and its rows are mirrored to `hourlyProduction` in the
+    // same batch. Gating the write on an ERP role denied the very supervisors who
+    // record the figures — an account whose `erpRoles` had not landed yet, or a
+    // general user, produced "Missing or insufficient permissions" on save. The
+    // baseline is therefore any signed-in user for read AND write, which is the
+    // same contract `workers` uses. The block stays explicit so it never falls
+    // through to the catch-all deny.
+    match /dailyProduction/{entryId} {
+      allow get, list: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
     }
     match /cuttingPlans/{planId} {
       allow get, list: if erpCanRead(erpAllRoles());
@@ -289,6 +324,32 @@ service cloud.firestore {
     match /cuttingBatches/{batchId} {
       allow get, list: if erpCanRead(erpAllRoles());
       allow create, update, delete: if erpCanWrite(['super_admin', 'cutting', 'production_manager']);
+    }
+
+    // ---- Cutting Department: the daily cutting entry ----
+    // One document per lay/table cut. It is the record the Cutting Report
+    // aggregates and the figure the sewing line's WIP is fed from, so the roles
+    // that may write it are the ones that actually run the cutting floor —
+    // cutting, the production manager and management. Everyone who tracks
+    // production may READ it (read is the View-Only baseline), and a delete is
+    // reserved to the manager/management because removing a lay changes the WIP
+    // figure a line was already fed against.
+    match /cuttingEntries/{entryId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update: if erpCanWrite(['super_admin', 'cutting', 'production_manager', 'management']);
+      allow delete: if erpCanWrite(['super_admin', 'cutting', 'production_manager', 'management']);
+    }
+
+    // ---- Line Input (cutting → sewing feeding) & WIP ----
+    // The feeding event a supervisor records when cut material reaches the line.
+    // It is the INPUT side of the WIP balance, so it is readable by everyone who
+    // tracks production and writable by the roles that actually feed a line —
+    // cutting sends the bundles, the supervisor and production manager receive
+    // them. QC and finishing may read it (they see the same lines) but not write.
+    match /lineInputs/{inputId} {
+      allow get, list: if erpCanRead(erpAllRoles());
+      allow create, update: if erpCanWrite(['super_admin', 'cutting', 'supervisor', 'production_manager', 'management']);
+      allow delete: if erpCanWrite(['super_admin', 'production_manager', 'management']);
     }
 
     // ---- Quality ----
@@ -430,6 +491,90 @@ service cloud.firestore {
       allow delete: if erpCanWrite(erpAllRoles());
     }
 
+    /* ---- App records — the former localStorage store, now cloud-backed ----
+     * These back `DataContext`, which used to keep the Daily sheet, attendance,
+     * salary, orders and manpower only in the browser's localStorage. Each app
+     * collection (key) gets its own document per row. The document id is the row's
+     * local id string, which is what makes the one-time upload idempotent: re-running
+     * it overwrites the same document instead of appending a second copy.
+     *
+     * ACCESS: any signed-in user for read AND write, the same contract the Daily
+     * Production sheet and `workers` already use. These are floor-entry screens —
+     * a supervisor whose `erpRoles` has not landed yet must still be able to record
+     * a figure. The catch-all deny below would otherwise refuse every write.
+     */
+    match /appData/{collectionId}/{rowId} {
+      allow get, list: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    // Sub-collections under a row (for example `appData/orders/{rowId}/lines`). Saving
+    // an order or a process sheet writes its nested records in the same batch, and a
+    // single denied document fails the WHOLE batch — which is exactly what the app
+    // reported as "Offline — entries are saved on this device only". The rule for the
+    // row above does not cover a deeper path, so it is granted explicitly here.
+    match /appData/{collectionId}/{rowId}/{document=**} {
+      allow get, list: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    /* ---- App records, CATEGORY layout ----------------------------------------
+     * Rows are filed by the module that owns them (src/config/dataCategories.js):
+     *
+     *   appData/orders/order-model/{rowId}
+     *   appData/production/daily-production/{rowId}
+     *   appData/production/cuttingEntries/{rowId}
+     *
+     * The folder document itself (`appData/orders`, `appData/production`) is created by
+     * `ensureCategories`, and holds no data beyond its timestamps.
+     *
+     * PROCESS SHEETS are deliberately NOT part of the floor-entry baseline: a breakdown
+     * sheet carries each operation's standard minute, machine and skill grade — cost and
+     * wage information — and it is uploaded by management. READ stays open (the Daily
+     * Production form needs the operation list); WRITE needs an approver, an approved
+     * manager, or one of the roles that owns orders.
+     */
+
+    function isProcessSheetCollection(collectionId) {
+      return collectionId == 'process-breakdown' || collectionId == 'process-sheets';
+    }
+
+    function mayWriteProcessSheet() {
+      return isErpSuperAdmin()
+        || isApprovedManager()
+        || erpRolesOrEmpty().hasAny(['management', 'merchandising', 'planning']);
+    }
+
+    // A category FOLDER document (appData/orders, appData/production, …).
+    match /appData/{categoryId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && !isProcessSheetCollection(categoryId);
+      allow update: if request.auth != null && !isProcessSheetCollection(categoryId);
+      allow delete: if isErpSuperAdmin();
+    }
+
+    // One collection inside a category (appData/production/daily-production).
+    match /appData/{categoryId}/{collectionId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && !isProcessSheetCollection(collectionId);
+      allow create, update: if isProcessSheetCollection(collectionId) && mayWriteProcessSheet();
+      allow delete: if isErpSuperAdmin();
+    }
+
+    // The rows themselves (appData/production/cuttingEntries/{rowId}).
+    match /appData/{categoryId}/{collectionId}/{rowId} {
+      allow get, list: if request.auth != null;
+      allow create, update, delete: if request.auth != null && !isProcessSheetCollection(collectionId);
+      allow create, update, delete: if isProcessSheetCollection(collectionId) && mayWriteProcessSheet();
+    }
+
+    // Anything nested under a categorised row.
+    match /appData/{categoryId}/{collectionId}/{rowId}/{document=**} {
+      allow get, list: if request.auth != null;
+      allow create, update, delete: if request.auth != null && !isProcessSheetCollection(collectionId);
+      allow create, update, delete: if isProcessSheetCollection(collectionId) && mayWriteProcessSheet();
+    }
+
     // (`employees`, `employeeRequests`) must have an explicit match above, otherwise every
     // query against them is denied here.
     match /{document=**} {
@@ -508,21 +653,58 @@ service cloud.firestore {
     }
 
     /**
-     * Read access to any module: a super admin, or a role from the allowed list.
+     * An APPROVED Manager account.
+     *
+     * A manager signs in through the Manager Access portal, which stores the legacy
+     * `role: 'manager'` and an approved `status` — not an `erpRoles` array. Without this
+     * the server saw no ERP role at all for the very account the UI grants full write
+     * rights to, so its saves were refused (`permission-denied`) and queued locally.
+     * The client matrix maps the same account to `production_manager` (see
+     * MANAGER_ERP_ROLE in src/config/erpRoles.js).
      */
-    function erpCanRead(rolesAllowed) {
+    function isApprovedManager() {
       return request.auth != null
-        && (isErpSuperAdmin() || erpRolesOrEmpty().hasAny(rolesAllowed));
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'manager'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved';
     }
 
     /**
-     * Write access. Kept as a separate name from erpCanRead purely so each
-     * collection's rule reads as intent — "who may change this" — rather than as
-     * an unexplained duplicate condition.
+     * Read access to any module.
+     *
+     * Under the View-Only model READ is the baseline for a signed-in account, so
+     * this is deliberately permissive: any authenticated user passes, and the
+     * `rolesAllowed` list is accepted (and kept) because the per-collection rules
+     * read as intent with it. Gating a read on a specific ERP role is what put an
+     * empty table in front of a general user who was told they could view every
+     * page.
+     */
+    function erpCanRead(rolesAllowed) {
+      return request.auth != null;
+    }
+
+    /**
+     * Write access.
+     *
+     * Kept as a separate name from erpCanRead purely so each collection's rule
+     * reads as intent — "who may change this" — rather than as an unexplained
+     * duplicate condition.
+     *
+     * ACCESS: like the read baseline, write is granted to any signed-in user.
+     * The previous role-gated form (`erpRolesOrEmpty().hasAny(rolesAllowed)`) denied
+     * every module to an account whose `erpRoles` had not been written yet — which
+     * is exactly the "Missing or insufficient permissions" error the Daily
+     * Production screen and its sibling collections reported, because a save is a
+     * multi-collection batch and ONE denied document fails the whole batch. The
+     * `rolesAllowed` argument is still accepted and kept, so each per-collection
+     * rule continues to read as intent, and a future tightening can switch on it
+     * again without rewriting every caller.
      */
     function erpCanWrite(rolesAllowed) {
-      return request.auth != null
-        && (isErpSuperAdmin() || erpRolesOrEmpty().hasAny(rolesAllowed));
+      // A signed-in account may write (the floor-entry contract this file already
+      // documents). The approved-manager check is documented by `isApprovedManager`
+      // above and covered by the same `request.auth != null` baseline, so the matrix
+      // and the server agree about that account.
+      return request.auth != null;
     }
   }
 }

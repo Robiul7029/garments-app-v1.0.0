@@ -12,21 +12,42 @@ import {
 } from './erpCalculations';
 
 /**
+ * A date-only `YYYY-MM-DD` key at LOCAL midnight.
+ *
+ * `new Date('2026-11-30')` is parsed as UTC midnight, so on a machine behind UTC
+ * its local day parts read the 29th — an order due on the 30th would look a day
+ * early. A bare `YYYY-MM-DD` string is therefore taken at face value; anything
+ * else (Date, Firestore Timestamp, ISO string) is read through its own LOCAL
+ * parts. Returns '' for a missing/unreadable value.
+ */
+export function localDateKey(value) {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+  const d = parseDate(value);
+  if (!d) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
  * Whole days from `today` to `dueDate`; negative means the date has passed.
  *
  * Returns `null` — not 0 — when there is no usable date, because "no delivery
  * date recorded" and "due today" are different answers and the order table has
  * to tell them apart. The dashboard already branches on `null` for overdue and
  * due-soon checks, so a missing date can never be mistaken for a delay.
+ *
+ * Both ends are normalised to a local `YYYY-MM-DD` key first, so a bare date
+ * string cannot be shifted across a day boundary by a UTC round-trip.
  */
 export function daysUntil(dueDate, today) {
-  const due = parseDate(dueDate);
-  const now = parseDate(today) || new Date();
-  if (!due) return null;
-  // Compare date parts, not millisecond instants: a PO due "today" is due in 0
-  // days whether the timestamp sits at 00:00 or at 18:00.
-  const dueKey = toDateKey(due);
-  const nowKey = toDateKey(now);
+  const dueKey = localDateKey(dueDate);
+  const nowKey = localDateKey(today);
   if (!dueKey || !nowKey) return null;
   const dueMidnight = new Date(`${dueKey}T00:00:00`);
   const nowMidnight = new Date(`${nowKey}T00:00:00`);

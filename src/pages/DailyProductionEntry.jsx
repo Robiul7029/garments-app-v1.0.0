@@ -17,6 +17,9 @@ import {
   findOrderByStyle,
   processNamesForStyle,
   operationsForStyle,
+  splitValues,
+  joinValues,
+  DEFAULT_WORKING_HOURS,
 } from '../config/orderWorkflow';
 import {
   CAPACITY_COLLECTION,
@@ -217,29 +220,67 @@ export default function DailyProductionEntry({ item, category }) {
   /**
    * Applies a picked style/order to the form.
    *
-   * `prefill` is built by orderPrefill() inside the form component, and only
-   * contains values the order actually holds — so choosing a style never blanks
-   * a field. Colour and Size Range arrive here as the order's stored strings, so
-   * a multi-colour, multi-size order carries all of its values onto the entry.
+   * `prefill` is built by orderPrefill() inside the form component and carries the
+   * order's own fields plus the day's defaults — the production date (today), the
+   * working hours and the manpower. Those last two come from the capacity agreed
+   * for the style, so the planning figures a line was set up with are the ones the
+   * entry opens on, and Working Hours falls back to 10 when nothing is agreed yet.
+   *
+   * Everything the picker fills stays EDITABLE: an order gives the starting values,
+   * and the supervisor may correct any of them for the day actually being recorded.
    */
   function handleSelectOrder(style, option, prefill) {
     const nextOrderNo = prefill.order_no || '';
-    // Changing the style invalidates an operation picked against the previous
-    // one, and a stale SMV would misprice the day's efficiency — so the process
-    // is cleared unless the new style's sheet also lists it.
+    // Changing the style invalidates processes picked against the previous one, and
+    // a stale SMV would misprice the day's efficiency — so the chosen processes are
+    // kept only when the new style's sheet also lists them.
     const validOps = processNamesForStyle(processSheets, { style, order_no: nextOrderNo });
 
     setFormValues((prevValues) => {
-      const keepProcess = validOps.includes(prevValues.process) ? prevValues.process : '';
+      const kept = splitValues(prevValues.processes ?? prevValues.process)
+        .filter((p) => validOps.includes(p));
+      // The capacity for the NEWLY chosen style, since the prefill was built
+      // against the old one.
+      const capacity = capacityForStyle(capacityRecords, { style, order_no: nextOrderNo });
       return {
         ...prevValues,
         ...prefill,
         style,
         order_no: nextOrderNo,
-        process: keepProcess,
+        // Hours and manpower default from the style's saved capacity, but a value
+        // the supervisor has already typed is never overwritten.
+        working_hours: prevValues.working_hours || prefill.working_hours || DEFAULT_WORKING_HOURS,
+        manpower: prevValues.manpower || capacity?.manpower || prefill.manpower || '',
+        processes: joinValues(kept),
+        // Seed each kept process's target from its SMV, keeping any figure the
+        // supervisor already set by hand.
+        process_targets: seedTargets(kept, prevValues.process_targets || {}, capacity, style, nextOrderNo),
       };
     });
     void option;
+  }
+
+  /**
+   * Each chosen process's target, derived from its SMV unless already set.
+   *
+   * `style` is passed in rather than read from `formValues`: this runs inside a
+   * setFormValues updater for a style that has just CHANGED, so the closure's
+   * `formValues.style` is still the previous one — and deriving a target from the
+   * wrong sheet's SMV is exactly the sort of quiet wrongness this guards against.
+   */
+  function seedTargets(names, existing, capacity, style, orderNo) {
+    const operations = operationsForStyle(processSheets, { style, order_no: orderNo });
+    const next = { ...existing };
+    names.forEach((name) => {
+      if (next[name] !== undefined && next[name] !== '') return;
+      const derived = targetForOperation({
+        operations,
+        settings: capacity || {},
+        operationName: name,
+      });
+      if (derived.hasSmv) next[name] = derived.target;
+    });
+    return next;
   }
 
   function handleSubmit(e) {
@@ -327,6 +368,8 @@ export default function DailyProductionEntry({ item, category }) {
           processOptions={processOptions}
           onSelectOrder={handleSelectOrder}
           onSelectProcess={handleSelectProcess}
+          capacity={currentCapacity}
+          today={todayKey}
           derivedTarget={activeTarget.target}
           derivedHourlyTarget={activeTarget.hourly}
         />

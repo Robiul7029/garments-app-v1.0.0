@@ -204,7 +204,13 @@ export default function FieldInput({ field, value, formValues, onChange }) {
     <label className="form-field">
       {label}
       <input
-        required
+        // A `computed` field is derived from other inputs, so it is neither
+        // required nor typed — an empty box is a normal state mid-entry, and
+        // marking it required would block the save on a field the user is not
+        // meant to fill in. Its value is supplied by the caller.
+        required={!field.computed}
+        readOnly={field.computed}
+        disabled={field.computed}
         type={field.type}
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value)}

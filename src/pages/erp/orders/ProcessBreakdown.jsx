@@ -1,33 +1,29 @@
 import { MODULE } from '../../../config/erpRoles';
-import { C } from '../../../config/erpSchema';
-import ErpModulePlaceholder from '../shared/ErpModulePlaceholder';
+import ProcessUploadPage from '../../ProcessUploadPage';
 
 /**
- * ROBIUL GARMENTS ERP — Process Breakdown.
+ * ROBIUL GARMENTS ERP — Process Sheet Upload (a tab of Order Management).
  *
- * The per-operation plan for a style: every sewing operation, its SMV, machine
- * type and the minutes it is allowed. This is what a line balance is built from
- * and what the efficiency figure on the dashboard is measured against — without
- * a breakdown, an "efficiency %" is a number with no denominator.
+ * The real process-sheet screen: pick the style or order, upload the breakdown
+ * workbook, review the parsed operations, and get the SMV roll-up the line
+ * balance and every efficiency figure are measured against.
  *
- * Nested under Order Input because a breakdown always belongs to one order.
+ * Named for what the tab does — you UPLOAD the sheet here. The screen behind it
+ * is `ProcessUploadPage`, the working form the legacy menu already used; as with
+ * Order Input, this tab replaces a placeholder that promised a screen the app
+ * already had.
+ *
+ * The page reads `order-model` for its style list and writes parsed operations
+ * to `process-breakdown`, which is exactly what the Daily Production process
+ * dropdown then reads back for that style.
  */
 export default function ProcessBreakdown() {
   return (
-    <ErpModulePlaceholder
-      icon="🧩"
-      title="Process Breakdown"
-      moduleLabel={MODULE.ORDERS}
-      collection={C.STYLES}
-      description="The operation-by-operation plan for a style — SMV, machine type and allowed minutes, which the line balance and every efficiency figure depend on."
-      note="SMV is already a field on the style master, so a style can carry a single figure today. This screen holds the FULL breakdown, per operation."
-      features={[
-        { label: 'Operation list per style', hint: 'Operation name, machine, SMV, allowance' },
-        { label: 'Total SMV roll-up', hint: 'Feeds efficiency across the dashboard' },
-        { label: 'Import from the Excel breakdown sheet', hint: 'Maps columns to operations' },
-        { label: 'Machine-type summary', hint: 'What the line must be set up with' },
-        { label: 'Line balance suggestion', hint: 'Operators required per operation' },
-      ]}
-    />
+    <div className="erp-tab-embed">
+      <ProcessUploadPage
+        category={{ key: MODULE.ORDERS, label: 'Order Management', icon: '📑' }}
+        item={{ key: 'process-breakdown', label: 'Process Sheet Upload', icon: '📤' }}
+      />
+    </div>
   );
 }

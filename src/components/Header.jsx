@@ -66,7 +66,7 @@ export default function Header() {
   const role = useRole() || {};
   const { isAdmin } = role;
   const data = useData() || {};
-  const { getData } = data;
+  const { getData, cloudError } = data;
   const activity = useActivity() || NO_ACTIVITY;
   const { notifications, unreadCount, markRead, markAllRead, removeNotification, loadError, ready } = activity;
   const navigate = useNavigate();
@@ -338,6 +338,17 @@ export default function Header() {
           <div className="brand-logo">AB</div>
           <div className="brand-name">{COMPANY_NAME}</div>
         </Link>
+
+        {/* An entry saved only to this device must never look like a cloud save. The
+            message is only shown when the Firebase connection has actually failed — an
+            access refusal gets its own wording, so the app is never mislabelled "Offline". */}
+        {cloudError && (
+          <div className="cloud-sync-warning" role="status" aria-live="polite" title={cloudError}>
+            {/offline|unavailable|connection|network/i.test(cloudError)
+              ? '⚠ Offline — entries are saved on this device only'
+              : '⚠ Cloud save failed — the entry is saved on this device only'}
+          </div>
+        )}
 
         <div className="header-actions">
           <div className="account-menu" ref={notifRef}>
